@@ -15,6 +15,19 @@ import PptxGenJS from 'pptxgenjs';
 
 declare var Plotly: any;
 
+// Use a unique name for the interface to avoid global namespace conflicts
+interface AIStudioInterface {
+  hasSelectedApiKey(): Promise<boolean>;
+  openSelectKey(): Promise<void>;
+}
+
+declare global {
+  interface Window {
+    // Make optional to match environment-specific declarations and avoid modifier conflicts
+    aistudio?: AIStudioInterface;
+  }
+}
+
 type PPTStyle = {
   id: string;
   name: string;
@@ -58,6 +71,19 @@ const App: React.FC = () => {
   const [currentChartImage, setCurrentChartImage] = useState<string | null>(null);
   const [savedCharts, setSavedCharts] = useState<SavedChart[]>([]);
   const chartRef = useRef<HTMLDivElement>(null);
+
+  // Обработка ключа API для AI Studio
+  useEffect(() => {
+    const checkKey = async () => {
+      if (window.aistudio) {
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        if (!hasKey) {
+          await window.aistudio.openSelectKey();
+        }
+      }
+    };
+    checkKey();
+  }, []);
 
   const results = useMemo((): CalculationResult | null => {
     const { m, q, w, f300, f600 } = labData;
@@ -117,12 +143,8 @@ const App: React.FC = () => {
 
     const xVar = CHART_VARIABLES[axisX];
     const yVar = CHART_VARIABLES[axisY];
-    
-    const xSteps = 20;
-    const ySteps = 20;
-    const xData: number[] = [];
-    const yData: number[] = [];
-    const zData: number[][] = [];
+    const xSteps = 20, ySteps = 20;
+    const xData: number[] = [], yData: number[] = [], zData: number[][] = [];
 
     for (let i = 0; i <= xSteps; i++) xData.push(xVar.min + (xVar.max - xVar.min) * (i / xSteps));
     for (let j = 0; j <= ySteps; j++) yData.push(yVar.min + (yVar.max - yVar.min) * (j / ySteps));
@@ -130,322 +152,184 @@ const App: React.FC = () => {
     for (let j = 0; j <= ySteps; j++) {
       const row: number[] = [];
       for (let i = 0; i <= xSteps; i++) {
-        let current_m = results.m;
-        let current_q = results.q;
-        let current_f600 = parseFloat(labData.f600.replace(',', '.')) || 60;
-        let current_yp = results.yp;
-        let current_s: number | undefined = undefined;
-
-        const updateParams = (key: keyof typeof CHART_VARIABLES, val: number) => {
-          if (key === 'm') current_m = val;
-          else if (key === 'q') current_q = val;
-          else if (key === 'f600') current_f600 = val;
-          else if (key === 'yp') current_yp = val;
-          else if (key === 'yp_f600') current_s = val;
-        };
-
-        updateParams(axisX, xData[i]);
-        updateParams(axisY, yData[j]);
+        let current_m = results.m, current_q = results.q, current_f600 = parseFloat(labData.f600) || 60, current_yp = results.yp, current_s: number | undefined = undefined;
+        if (axisX === 'm') current_m = xData[i]; else if (axisX === 'q') current_q = xData[i]; else if (axisX === 'f600') current_f600 = xData[i]; else if (axisX === 'yp') current_yp = xData[i]; else if (axisX === 'yp_f600') current_s = xData[i];
+        if (axisY === 'm') current_m = yData[j]; else if (axisY === 'q') current_q = yData[j]; else if (axisY === 'f600') current_f600 = yData[j]; else if (axisY === 'yp') current_yp = yData[j]; else if (axisY === 'yp_f600') current_s = yData[j];
         row.push(calculateCompleteness(current_m, current_q, current_f600, current_yp, current_s));
       }
       zData.push(row);
     }
 
-    const data = [{
-      z: zData,
-      x: xData,
-      y: yData,
-      type: 'surface',
-      colorscale: 'Viridis',
-      colorbar: { title: 'Полнота', thickness: 15 }
-    }];
-
-    const layout = {
-      title: `Зависимость полноты от ${xVar.label} и ${yVar.label}`,
-      autosize: true,
-      margin: { l: 0, r: 0, b: 0, t: 50 },
-      scene: {
-        xaxis: { title: xVar.label },
-        yaxis: { title: yVar.label },
-        zaxis: { title: 'Полнота', range: [30, 200] }
-      },
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: 'rgba(0,0,0,0)',
-    };
+    const data = [{ z: zData, x: xData, y: yData, type: 'surface', colorscale: 'Viridis', colorbar: { title: 'Полнота' } }];
+    const layout = { title: `Полнота от ${xVar.label} и ${yVar.label}`, autosize: true, margin: { l: 0, r: 0, b: 0, t: 50 }, scene: { xaxis: { title: xVar.label }, yaxis: { title: yVar.label }, zaxis: { title: 'Полнота', range: [30, 200] } } };
 
     try {
       await Plotly.newPlot(chartRef.current, data, layout, { responsive: true, displayModeBar: false });
       const img = await Plotly.toImage(chartRef.current, { format: 'png', width: 1000, height: 800 });
       setCurrentChartImage(img);
-    } catch (err) {
-      console.error("Plotly error:", err);
-    }
+    } catch (err) { console.error(err); }
   };
 
-  useEffect(() => {
-    if (showChartModal && results) {
-      generateChart();
-    }
-  }, [showChartModal, axisX, axisY, results]);
+  useEffect(() => { if (showChartModal && results) generateChart(); }, [showChartModal, axisX, axisY, results]);
 
   const toggleChartInReport = () => {
     if (!currentChartImage) return;
     const chartId = `${axisX}-${axisY}`;
     const exists = savedCharts.find(c => c.id === chartId);
-    if (exists) {
-      setSavedCharts(savedCharts.filter(c => c.id !== chartId));
-    } else {
-      setSavedCharts([...savedCharts, {
-        id: chartId,
-        axisX: CHART_VARIABLES[axisX].label,
-        axisY: CHART_VARIABLES[axisY].label,
-        imageData: currentChartImage
-      }]);
-    }
+    if (exists) setSavedCharts(savedCharts.filter(c => c.id !== chartId));
+    else setSavedCharts([...savedCharts, { id: chartId, axisX: CHART_VARIABLES[axisX].label, axisY: CHART_VARIABLES[axisY].label, imageData: currentChartImage }]);
   };
 
-  const isCurrentChartInReport = savedCharts.some(c => c.id === `${axisX}-${axisY}`);
-
   const handleGetConclusions = async () => {
-    if (!results) {
-        setAnalysisError("Введите все данные для расчета.");
-        return;
-    }
-    setAnalysisError(null);
-    setIsAnalyzing(true);
+    if (!results) { setAnalysisError("Введите данные."); return; }
+    setAnalysisError(null); setIsAnalyzing(true);
     try {
       const cons = await getBentoniteConclusions(results);
       setConclusions(cons);
-    } catch (err) { 
-        console.error("Analysis failed:", err); 
-        setAnalysisError("Ошибка связи с ИИ.");
-    } finally { 
-        setIsAnalyzing(false); 
-    }
+    } catch (err: any) {
+      console.error(err);
+      if (err.message?.includes("Requested entity was not found") && window.aistudio) {
+        await window.aistudio.openSelectKey();
+      }
+      setAnalysisError("Ошибка связи с ИИ.");
+    } finally { setIsAnalyzing(false); }
   };
 
   const exportWord = async () => {
     if (!results) return;
     const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, VerticalAlign, ImageRun } = docx;
-
     const base64ToUint8Array = (base64: string) => {
-      const binaryString = window.atob(base64);
-      const len = binaryString.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) { bytes[i] = binaryString.charCodeAt(i); }
+      const bin = atob(base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       return bytes;
     };
-
-    const createCell = (text: string, bold = false, align: any = "center") => new TableCell({
-      children: [new Paragraph({ 
-        children: [new TextRun({ text: String(text), bold, size: 22 })],
-        alignment: align
-      })],
-      verticalAlign: VerticalAlign.CENTER,
-      margins: { top: 100, bottom: 100, left: 100, right: 100 }
-    });
-
-    const reportRows = [
-      ["Содержание смектита (m)", `${results.m}%`],
-      ["Обменная емкость (q)", String(results.q)],
-      ["Влажность (w)", `${results.w}%`],
-      ["PV (Пластическая вязкость)", results.pv.toFixed(2)],
-      ["YP (Предел текучести)", results.yp.toFixed(2)],
-      ["Эфф. вязкость (f600/2)", results.f.toFixed(2)],
-      ["YP/PV", results.ypPvRatio.toFixed(2)],
-      ["ПОЕ (полная емкость)", results.poe.toFixed(2)],
-      ["Критерий изотропии", results.isotropy.toFixed(4)],
-      ["Критерий генерации", results.generation.toFixed(2)],
-      ["Критерий загущения", results.thickening.toFixed(2)],
-      ["Критерий полноты", results.completeness.toFixed(2)],
-    ];
-
+    const createCell = (text: string, bold = false) => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text, bold, size: 22 })], alignment: "center" })], verticalAlign: VerticalAlign.CENTER });
+    const reportRows = [ ["Содержание смектита (m)", `${results.m}%`], ["Обменная емкость (q)", String(results.q)], ["Влажность (w)", `${results.w}%`], ["PV (Пл. вязкость)", results.pv.toFixed(2)], ["YP (Пред. текучести)", results.yp.toFixed(2)], ["YP/PV", results.ypPvRatio.toFixed(2)], ["Критерий полноты", results.completeness.toFixed(2)] ];
     const children: any[] = [
-      new Paragraph({
-        alignment: "center",
-        spacing: { after: 400 },
-        children: [new TextRun({ text: "ОТЧЕТ ОБ ИСПЫТАНИИ БЕНТОНИТА", bold: true, size: 32, color: "4f46e5" })],
-      }),
-      new Table({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        rows: [
-          new TableRow({ children: [createCell("Параметр", true), createCell("Значение", true)] }),
-          ...reportRows.map(row => new TableRow({ 
-            children: [ createCell(row[0], false, "left"), createCell(row[1], false, "center") ] 
-          }))
-        ],
-      }),
+      new Paragraph({ alignment: "center", spacing: { after: 400 }, children: [new TextRun({ text: "ОТЧЕТ ОБ ИСПЫТАНИИ БЕНТОНИТА", bold: true, size: 32, color: "4f46e5" })] }),
+      new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [ new TableRow({ children: [createCell("Параметр", true), createCell("Значение", true)] }), ...reportRows.map(row => new TableRow({ children: [createCell(row[0], false), createCell(row[1], false)] })) ] }),
       new Paragraph({ text: "", spacing: { before: 400 } }),
-      new Paragraph({ children: [new TextRun({ text: "ЭКСПЕРТНЫЕ ВЫВОДЫ:", bold: true, size: 28, color: "10b981" })], spacing: { after: 200 } }),
-      ...conclusions.map((c, i) => {
-        const sRaw = c.sentiment?.toLowerCase().trim() || 'neutral';
-        const isNeg = sRaw.includes('neg') || sRaw.includes('нег') || sRaw.includes('плох') || sRaw.includes('bad');
-        return new Paragraph({ 
-          spacing: { before: 120 }, 
-          children: [
-            new TextRun({ text: `${i + 1}. `, bold: true, color: isNeg ? "b45309" : "10b981" }), 
-            new TextRun({ text: c.text })
-          ] 
-        });
-      }),
+      new Paragraph({ children: [new TextRun({ text: "ЭКСПЕРТНЫЕ ВЫВОДЫ:", bold: true, size: 28, color: "10b981" })] }),
+      ...conclusions.map((c, i) => new Paragraph({ spacing: { before: 120 }, children: [new TextRun({ text: `${i + 1}. `, bold: true }), new TextRun({ text: c.text })] }))
     ];
-
     if (savedCharts.length > 0) {
       children.push(new Paragraph({ text: "", spacing: { before: 400 } }));
-      children.push(new Paragraph({ alignment: "center", children: [new TextRun({ text: "ГРАФИЧЕСКИЙ АНАЛИЗ ПОЛНОТЫ", bold: true, size: 28, color: "4f46e5" })] }));
       savedCharts.forEach(chart => {
-        const base64Data = chart.imageData.split(',')[1];
-        const bytes = base64ToUint8Array(base64Data);
-        children.push(new Paragraph({ spacing: { before: 200 }, alignment: "center", children: [new TextRun({ text: `Зависимость от ${chart.axisX} и ${chart.axisY}`, bold: true, size: 20 })] }));
-        children.push(new Paragraph({
-          alignment: "center",
-          children: [new ImageRun({ data: bytes, transformation: { width: 500, height: 375 } })]
-        }));
+        children.push(new Paragraph({ alignment: "center", children: [new ImageRun({ data: base64ToUint8Array(chart.imageData.split(',')[1]), transformation: { width: 500, height: 375 } })] }));
       });
     }
-
-    const doc = new Document({ sections: [{ children }] });
-    const blob = await Packer.toBlob(doc);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'geolab_report.docx';
-    a.click();
-    URL.revokeObjectURL(url);
+    const blob = await Packer.toBlob(new Document({ sections: [{ children }] }));
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'geolab_report.docx'; a.click();
   };
 
   const createPPTX = async (style: PPTStyle) => {
-    if (!results) return;
-    setIsGeneratingDoc(true);
-    setShowStylePicker(false);
-    
+    if (!results) return; setIsGeneratingDoc(true); setShowStylePicker(false);
     try {
       const pptx = new PptxGenJS();
       pptx.layout = 'LAYOUT_WIDE';
-      pptx.defineSlideMaster({
-        title: 'MASTER_SLIDE',
-        background: { color: style.bg },
-        objects: [
-          { rect: { x: 0, y: 0, w: '100%', h: 0.8, fill: { color: style.primary } } },
-          { text: { text: 'GeoLab Pro: Технический отчет', options: { x: 0.5, y: 0.2, color: 'ffffff', fontSize: 24, bold: true } } }
-        ]
-      });
-
-      const s1 = pptx.addSlide({ masterName: 'MASTER_SLIDE' });
-      s1.addText('Анализ качества и пригодности\nбентонита', { x: 1, y: 1.5, w: 8, fontSize: 36, bold: true, color: style.primary });
-
-      const s2 = pptx.addSlide({ masterName: 'MASTER_SLIDE' });
-      s2.addText('Результаты измерений', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
-      const rows = [['Параметр', 'Значение'], ['Смектит (m)', `${results.m}%`], ['КОЕ (q)', String(results.q)], ['PV', results.pv.toFixed(2)], ['YP', results.yp.toFixed(2)], ['YP/PV', results.ypPvRatio.toFixed(2)]];
-      s2.addTable(rows as any, { x: 0.5, y: 2, w: 10, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
-
-      savedCharts.forEach(chart => {
-        const sChart = pptx.addSlide({ masterName: 'MASTER_SLIDE' });
-        sChart.addText(`3D Анализ: ${chart.axisX} vs ${chart.axisY}`, { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
-        sChart.addImage({ data: chart.imageData, x: 1, y: 1.8, w: 11, h: 5.2 });
-      });
-
-      const s3 = pptx.addSlide({ masterName: 'MASTER_SLIDE' });
-      s3.addText('Критерии качества', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
-      const critRows = [['Критерий', 'Значение', 'Оценка'], ['Изотропия', results.isotropy.toFixed(4), results.isotropy >= 0.24 ? 'Ок' : 'Низкая'], ['Генерация', results.generation.toFixed(2), results.generation > 8.5 ? 'Высокая' : 'Низкая'], ['Загущение', results.thickening.toFixed(2), results.thickening < 1.3 ? 'Оптимально' : 'Высокое'], ['Полнота', results.completeness.toFixed(2), results.completeness > 115 ? 'Идеально' : 'Средне']];
-      s3.addTable(critRows as any, { x: 0.5, y: 2, w: 12, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
-
-      const s4 = pptx.addSlide({ masterName: 'MASTER_SLIDE' });
-      s4.addText('Экспертные выводы', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
-      conclusions.forEach((c, i) => {
-        const sVal = c.sentiment?.toLowerCase().trim() || 'neutral';
-        const isN = sVal.includes('neg') || sVal.includes('нег') || sVal.includes('bad');
-        const color = isN ? 'b45309' : style.primary;
-        s4.addText(`${i+1}. ${c.text}`, { x: 0.5, y: 2 + i * 0.7, w: 9, fontSize: 14, color });
-      });
-
+      pptx.defineSlideMaster({ title: 'MASTER', background: { color: style.bg }, objects: [{ rect: { x: 0, y: 0, w: '100%', h: 0.8, fill: { color: style.primary } } }, { text: { text: 'GeoLab Pro Report', options: { x: 0.5, y: 0.2, color: 'ffffff', fontSize: 24, bold: true } } }] });
+      const s1 = pptx.addSlide({ masterName: 'MASTER' });
+      s1.addText('Технический отчет по качеству бентонита', { x: 1, y: 2, w: 11, fontSize: 36, bold: true, color: style.primary });
+      const s2 = pptx.addSlide({ masterName: 'MASTER' });
+      s2.addTable([['Параметр', 'Значение'], ['Смектит', `${results.m}%`], ['КОЕ', String(results.q)], ['PV', results.pv.toFixed(2)], ['YP', results.yp.toFixed(2)], ['Полнота', results.completeness.toFixed(2)]], { x: 0.5, y: 1.5, w: 12, border: { pt: 1, color: style.secondary }, fill: { color: 'ffffff' } });
+      savedCharts.forEach(chart => { const sc = pptx.addSlide({ masterName: 'MASTER' }); sc.addImage({ data: chart.imageData, x: 1, y: 1, w: 11, h: 5.5 }); });
       await pptx.writeFile({ fileName: 'Geolab_Analysis.pptx' });
-    } catch (err) { console.error(err); }
-    finally { setIsGeneratingDoc(false); }
+    } finally { setIsGeneratingDoc(false); }
   };
+
+  const [isLiveActive, setIsLiveActive] = useState(false);
+  const sessionRef = useRef<any>(null);
+  const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+  // Tracks the next scheduled start time for gapless audio playback
+  const nextStartTimeRef = useRef<number>(0);
 
   const startLiveSession = async () => {
     if (isLiveActive) { sessionRef.current?.close(); setIsLiveActive(false); return; }
     try {
+      // Create a fresh instance for the session to ensure latest API key is used
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      audioContextInRef.current = new AudioContext({ sampleRate: 16000 });
-      audioContextOutRef.current = new AudioContext({ sampleRate: 24000 });
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const ctxIn = new AudioContext({ sampleRate: 16000 });
+      const ctxOut = new AudioContext({ sampleRate: 24000 });
+      
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-        config: {
-          responseModalities: [Modality.AUDIO],
-          inputAudioTranscription: {},
-          systemInstruction: 'Вы эксперт GeoLab. Помогайте вводить данные и анализировать бентонит.',
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } }
+        config: { 
+          responseModalities: [Modality.AUDIO], 
+          inputAudioTranscription: {}, 
+          systemInstruction: 'Вы эксперт GeoLab. Помогайте анализировать показатели бентонита.' 
         },
         callbacks: {
           onopen: () => {
             setIsLiveActive(true);
-            const source = audioContextInRef.current!.createMediaStreamSource(stream);
-            const scriptProcessor = audioContextInRef.current!.createScriptProcessor(4096, 1, 1);
-            scriptProcessor.onaudioprocess = (e) => {
-              const inputData = e.inputBuffer.getChannelData(0);
-              sessionPromise.then(s => s.sendRealtimeInput({ media: createBlob(inputData) }));
+            const source = ctxIn.createMediaStreamSource(stream);
+            const proc = ctxIn.createScriptProcessor(4096, 1, 1);
+            // Use sessionPromise to prevent race conditions during connection
+            proc.onaudioprocess = (e) => { 
+              sessionPromise.then(s => s.sendRealtimeInput({ media: createBlob(e.inputBuffer.getChannelData(0)) })); 
             };
-            source.connect(scriptProcessor);
-            scriptProcessor.connect(audioContextInRef.current!.destination);
+            source.connect(proc); 
+            proc.connect(ctxIn.destination);
           },
           onmessage: async (msg: LiveServerMessage) => {
-            const parts = msg.serverContent?.modelTurn?.parts;
-            const audioData = parts && parts[0]?.inlineData?.data;
-            if (audioData && audioContextOutRef.current) {
-              const ctx = audioContextOutRef.current;
-              nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
-              const buffer = await decodeAudioData(decode(audioData), ctx, 24000, 1);
-              const source = ctx.createBufferSource();
-              source.buffer = buffer;
-              source.connect(ctx.destination);
-              source.addEventListener('ended', () => { sourcesRef.current.delete(source); });
-              source.start(nextStartTimeRef.current);
+            const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+            if (audioData) {
+              // Gapless playback scheduling
+              nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctxOut.currentTime);
+              const buffer = await decodeAudioData(decode(audioData), ctxOut, 24000, 1);
+              const source = ctxOut.createBufferSource(); 
+              source.buffer = buffer; 
+              source.connect(ctxOut.destination);
+              source.addEventListener('ended', () => {
+                sourcesRef.current.delete(source);
+              });
+              source.start(nextStartTimeRef.current); 
               nextStartTimeRef.current += buffer.duration;
               sourcesRef.current.add(source);
             }
+
+            // Handle session interruption
             if (msg.serverContent?.interrupted) {
-              for (const source of sourcesRef.current.values()) { source.stop(); sourcesRef.current.delete(source); }
+              for (const source of sourcesRef.current.values()) {
+                try { source.stop(); } catch (e) {}
+              }
+              sourcesRef.current.clear();
               nextStartTimeRef.current = 0;
             }
+
             if (msg.serverContent?.inputTranscription) {
-              const text = msg.serverContent.inputTranscription.text;
-              setLiveTranscription(text ?? '');
-              const parsed = parseSpokenNumber(text ?? '');
-              if (parsed !== null) setLabData(prev => ({ ...prev, [LAB_ORDER[currentStep]]: parsed.toString() }));
+              const val = parseSpokenNumber(msg.serverContent.inputTranscription.text || '');
+              if (val !== null) setLabData(prev => ({ ...prev, [LAB_ORDER[currentStep]]: val.toString() }));
             }
           },
-          onclose: () => setIsLiveActive(false),
-          onerror: () => setIsLiveActive(false)
+          onclose: () => {
+            setIsLiveActive(false);
+            nextStartTimeRef.current = 0;
+          },
+          onerror: () => {
+            setIsLiveActive(false);
+            nextStartTimeRef.current = 0;
+          }
         }
       });
       sessionRef.current = await sessionPromise;
     } catch (e) { setIsLiveActive(false); }
   };
 
-  const [isLiveActive, setIsLiveActive] = useState(false);
-  const [liveTranscription, setLiveTranscription] = useState('');
-  const sessionRef = useRef<any>(null);
-  const audioContextInRef = useRef<AudioContext | null>(null);
-  const audioContextOutRef = useRef<AudioContext | null>(null);
-  const nextStartTimeRef = useRef(0);
-  const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-
   return (
-    <div className="min-h-screen bg-slate-50 p-3 md:p-5 text-slate-900 font-sans text-left">
-      <div className="max-w-4xl mx-auto space-y-4">
-        <header className="flex items-center justify-between bg-white px-5 py-4 rounded-2xl shadow-sm border border-slate-100">
+    <div className="min-h-screen bg-slate-50 p-4 md:p-10 text-slate-900 flex flex-col items-center">
+      <div className="w-full max-w-4xl space-y-6">
+        <header className="flex justify-between items-center bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100">
           <div className="flex items-center gap-3">
             <div className={`w-3 h-3 rounded-full ${isLiveActive ? 'bg-red-500 animate-pulse' : 'bg-indigo-600'}`}></div>
-            <h1 className="text-xl font-black tracking-tighter">GeoLab<span className="text-indigo-600">Pro</span></h1>
+            <h1 className="text-2xl font-black tracking-tighter">GeoLab<span className="text-indigo-600">Pro</span></h1>
           </div>
           <div className="flex gap-2">
-            <button onClick={startLiveSession} className={`px-4 py-2 rounded-xl font-bold text-xs uppercase shadow-md ${isLiveActive ? 'bg-red-500 text-white' : 'bg-indigo-600 text-white'}`}>
+            <button onClick={startLiveSession} className={`px-5 py-2.5 rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-md transition-all ${isLiveActive ? 'bg-red-500 text-white' : 'bg-indigo-600 text-white'}`}>
               {isLiveActive ? 'Стоп' : 'Голос'}
             </button>
-            <label className="cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-xl font-bold text-xs uppercase shadow-sm">
+            <label className="cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-600 px-5 py-2.5 rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-sm">
               {isUploading ? '...' : 'Фото'}
               <input type="file" className="hidden" accept="image/*" onChange={async (e) => {
                 const file = e.target.files?.[0]; if (!file) return;
@@ -453,11 +337,9 @@ const App: React.FC = () => {
                 const reader = new FileReader();
                 reader.onloadend = async () => {
                   try {
-                    const base64 = (reader.result as string).split(',')[1];
-                    const ext = await extractLabDataFromImage(base64);
+                    const ext = await extractLabDataFromImage((reader.result as string).split(',')[1]);
                     setLabData(prev => ({ ...prev, ...ext }));
-                  } catch (err) { console.error(err); } 
-                  finally { setIsUploading(false); }
+                  } finally { setIsUploading(false); }
                 };
                 reader.readAsDataURL(file);
               }} />
@@ -465,87 +347,69 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        {isLiveActive && (
-          <div className="bg-slate-900 text-white px-5 py-3 rounded-xl shadow-lg border-l-4 border-indigo-500">
-            <p className="text-xs text-indigo-300 font-bold uppercase mb-1">Распознано:</p>
-            <p className="text-sm italic">{liveTranscription || "Слушаю..."}</p>
-          </div>
-        )}
-
-        <div className="grid grid-cols-5 gap-2">
+        <div className="grid grid-cols-5 gap-3">
           {LAB_ORDER.map((key, index) => (
             <button key={key} onClick={() => { setCurrentStep(index); setShowResults(false); }}
-              className={`p-3 rounded-2xl border-2 text-center transition-all ${currentStep === index ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg' : labData[key] ? 'bg-white border-emerald-100 text-slate-800' : 'bg-white border-slate-200 opacity-60'}`}>
+              className={`p-4 rounded-[1.5rem] border-2 text-center transition-all ${currentStep === index ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl scale-105' : labData[key] ? 'bg-white border-emerald-100 text-slate-800' : 'bg-white border-slate-200 opacity-60'}`}>
               <div className={`text-[8px] font-black uppercase mb-1 truncate ${currentStep === index ? 'text-indigo-100' : 'text-slate-400'}`}>{LAB_LABELS[key]}</div>
-              <div className="text-lg font-mono font-black">{labData[key] || '0'}</div>
+              <div className="text-xl font-mono font-black">{labData[key] || '0'}</div>
             </button>
           ))}
         </div>
 
-        {!showResults && (
-          <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 text-center">
-            <h2 className="text-lg font-black text-slate-400 uppercase tracking-widest mb-6">{LAB_LABELS[LAB_ORDER[currentStep]]}</h2>
-            <input type="text" inputMode="decimal" className="w-full text-center text-6xl font-mono font-black py-4 bg-slate-50 border-b-8 border-slate-100 focus:border-indigo-600 outline-none rounded-2xl"
+        {!showResults ? (
+          <div className="bg-white p-12 rounded-[2.5rem] shadow-2xl border border-slate-100 text-center relative overflow-hidden animate-slide-up">
+            <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] mb-10">{LAB_LABELS[LAB_ORDER[currentStep]]}</h2>
+            <input type="text" inputMode="decimal" className="w-full text-center text-7xl font-mono font-black py-6 bg-slate-50 border-b-8 border-slate-100 focus:border-indigo-600 outline-none rounded-3xl transition-all"
               value={labData[LAB_ORDER[currentStep]]} onChange={(e) => setLabData(p => ({ ...p, [LAB_ORDER[currentStep]]: e.target.value }))}
               onKeyDown={(e) => e.key === 'Enter' && (currentStep < 4 ? setCurrentStep(currentStep + 1) : setShowResults(true))} autoFocus />
-            <div className="flex justify-center mt-8 gap-4">
-              <button onClick={() => (currentStep < 4 ? setCurrentStep(currentStep + 1) : setShowResults(true))} className="bg-indigo-600 text-white px-12 py-4 rounded-2xl font-black uppercase shadow-xl hover:bg-indigo-700">
-                {currentStep === 4 ? 'Рассчитать' : 'Продолжить'}
-              </button>
-            </div>
+            <button onClick={() => (currentStep < 4 ? setCurrentStep(currentStep + 1) : setShowResults(true))} className="mt-12 bg-indigo-600 text-white px-16 py-5 rounded-3xl font-black uppercase text-sm tracking-widest shadow-2xl hover:bg-indigo-700 active:scale-95 transition-all">
+              {currentStep === 4 ? 'Рассчитать' : 'Продолжить'}
+            </button>
           </div>
-        )}
-
-        {showResults && results && (
-          <div className="space-y-4 animate-in fade-in zoom-in-95">
-            <div className="bg-white rounded-3xl overflow-hidden shadow-2xl border border-slate-100">
-              <div className="bg-indigo-600 p-6 text-white flex justify-between items-center">
-                <h3 className="text-lg font-black uppercase">Протокол</h3>
+        ) : (
+          <div className="space-y-6 animate-slide-up">
+            <div className="bg-white rounded-[2.5rem] overflow-hidden shadow-2xl border border-slate-100">
+              <div className="bg-indigo-600 p-8 text-white flex justify-between items-center">
+                <h3 className="text-lg font-black uppercase tracking-widest">Протокол</h3>
                 <div className="flex gap-2">
-                  <button onClick={() => setShowChartModal(true)} className="bg-emerald-500 text-white px-3 py-2 rounded-lg text-[10px] font-black uppercase">Графики</button>
-                  <button onClick={exportWord} className="bg-white/20 px-3 py-2 rounded-lg text-[10px] font-black uppercase">Word</button>
-                  <button onClick={() => setShowStylePicker(true)} className="bg-white text-indigo-700 px-4 py-2 rounded-lg text-[10px] font-black uppercase">PPTX</button>
+                  <button onClick={() => setShowChartModal(true)} className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2.5 rounded-2xl text-[10px] font-black uppercase shadow-lg">Графики</button>
+                  <button onClick={exportWord} className="bg-white/20 px-4 py-2.5 rounded-2xl text-[10px] font-black uppercase">Word</button>
+                  <button onClick={() => setShowStylePicker(true)} className="bg-white text-indigo-700 px-4 py-2.5 rounded-2xl text-[10px] font-black uppercase shadow-lg">PPTX</button>
                 </div>
               </div>
-              <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="space-y-2">
+              <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-10">
+                <div className="space-y-3">
                   {LAB_ORDER.map(k => (
-                    <div key={k} className="flex justify-between border-b pb-1 text-sm"><span className="text-slate-500">{LAB_LABELS[k]}</span><span className="font-mono font-black">{labData[k]}</span></div>
+                    <div key={k} className="flex justify-between border-b border-slate-50 pb-2 text-sm"><span className="text-slate-500 font-bold">{LAB_LABELS[k]}</span><span className="font-mono font-black">{labData[k]}</span></div>
                   ))}
-                  <div className="flex justify-between font-black text-indigo-600 bg-indigo-50 p-2 rounded mt-2"><span>ПОЕ (полная емкость)</span><span>{results.poe.toFixed(2)}</span></div>
+                  {results && <div className="bg-indigo-50 p-4 rounded-2xl mt-4 flex justify-between items-center"><span className="text-[10px] font-black text-indigo-600 uppercase">Полнота</span><span className="text-xl font-mono font-black text-indigo-700">{results.completeness.toFixed(2)}</span></div>}
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                   {[{ l: 'Изотропия', v: results.isotropy.toFixed(4) }, { l: 'Генерация', v: results.generation.toFixed(2) }, { l: 'Загущение', v: results.thickening.toFixed(2) }, { l: 'Полнота', v: results.completeness.toFixed(2) }].map(c => (
-                     <div key={c.l} className="bg-slate-50 p-3 rounded-xl border flex flex-col items-center">
-                       <span className="text-[8px] font-black text-slate-400 uppercase">{c.l}</span>
-                       <span className="text-sm font-mono font-black text-indigo-700">{c.v}</span>
+                <div className="grid grid-cols-2 gap-4">
+                   {results && [{ l: 'Изотропия', v: results.isotropy.toFixed(4) }, { l: 'Генерация', v: results.generation.toFixed(2) }, { l: 'Загущение', v: results.thickening.toFixed(2) }, { l: 'YP/PV', v: results.ypPvRatio.toFixed(2) }].map(c => (
+                     <div key={c.l} className="bg-slate-50 p-5 rounded-3xl border border-slate-100 flex flex-col items-center justify-center">
+                       <span className="text-[9px] font-black text-slate-400 uppercase mb-2">{c.l}</span>
+                       <span className="text-xl font-mono font-black text-indigo-700">{c.v}</span>
                      </div>
                    ))}
                 </div>
               </div>
             </div>
 
-            <div className="bg-white rounded-3xl p-6 shadow-2xl border border-slate-100">
-              <div className="flex justify-between items-center mb-6">
-                <h4 className="text-xl font-black text-slate-900">Выводы ИИ</h4>
-                <button onClick={handleGetConclusions} disabled={isAnalyzing} className="text-[10px] bg-emerald-600 text-white px-4 py-2 rounded-lg font-black uppercase">
-                   {isAnalyzing ? 'Обработка...' : 'Анализ'}
+            <div className="bg-white rounded-[2.5rem] p-8 shadow-2xl border border-slate-100">
+              <div className="flex justify-between items-center mb-8">
+                <h4 className="text-xl font-black text-slate-900 uppercase tracking-widest">Выводы ИИ</h4>
+                <button onClick={handleGetConclusions} disabled={isAnalyzing} className="text-[10px] bg-emerald-600 text-white px-6 py-3 rounded-2xl font-black uppercase shadow-lg hover:bg-emerald-700">
+                   {isAnalyzing ? 'Изучаю...' : 'Обновить'}
                 </button>
               </div>
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {conclusions.map((c, i) => {
-                  const s = c.sentiment?.toLowerCase().trim() || 'neutral';
-                  const isNegative = s.includes('neg') || s.includes('нег') || s.includes('bad') || s.includes('плох');
-                  
-                  // Коричнево-оранжевый (amber) для негативных, изумрудный для остальных
-                  const bgClass = isNegative ? 'bg-amber-100 border-amber-300' : 'bg-emerald-100 border-emerald-300';
-                  const dotClass = isNegative ? 'bg-amber-600' : 'bg-emerald-600';
-                  const textClass = isNegative ? 'text-amber-900' : 'text-emerald-900';
-                  
+                  const isNeg = c.sentiment === 'negative';
                   return (
-                    <div key={i} className={`flex gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm ${bgClass}`}>
-                      <span className={`flex-shrink-0 w-8 h-8 rounded-full text-white flex items-center justify-center font-black ${dotClass}`}>{i+1}</span>
-                      <p className={`text-sm font-bold leading-relaxed ${textClass}`}>{c.text}</p>
+                    <div key={i} className={`flex gap-5 p-6 rounded-3xl border-2 transition-all shadow-sm ${isNeg ? 'bg-amber-100 border-amber-300' : 'bg-emerald-100 border-emerald-300'}`}>
+                      <span className={`flex-shrink-0 w-10 h-10 rounded-2xl text-white flex items-center justify-center font-black ${isNeg ? 'bg-amber-600' : 'bg-emerald-600'}`}>{i+1}</span>
+                      <p className={`text-sm font-bold leading-relaxed ${isNeg ? 'text-amber-900' : 'text-emerald-900'}`}>{c.text}</p>
                     </div>
                   );
                 })}
@@ -556,23 +420,23 @@ const App: React.FC = () => {
       </div>
 
       {showChartModal && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center z-[70] p-4">
-          <div className="bg-white w-full max-w-5xl rounded-3xl overflow-hidden shadow-2xl flex flex-col h-[90vh]">
-            <div className="flex-grow p-2 min-h-0"><div ref={chartRef} className="w-full h-full"></div></div>
-            <div className="p-4 bg-slate-50 border-t flex flex-wrap gap-2 justify-between items-center">
-               <div className="flex gap-2">
-                  <select value={axisX} onChange={(e) => setAxisX(e.target.value as any)} className="bg-white border p-2 rounded-lg text-xs font-bold">
+        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-xl flex items-center justify-center z-[70] p-4">
+          <div className="bg-white w-full max-w-5xl rounded-[3rem] overflow-hidden shadow-2xl flex flex-col h-[85vh]">
+            <div className="flex-grow p-4 min-h-0"><div ref={chartRef} className="w-full h-full"></div></div>
+            <div className="p-8 bg-slate-50 border-t flex flex-wrap gap-4 justify-between items-center">
+               <div className="flex gap-3">
+                  <select value={axisX} onChange={(e) => setAxisX(e.target.value as any)} className="bg-white border-2 border-slate-200 px-4 py-2 rounded-xl text-xs font-black">
                     {Object.entries(CHART_VARIABLES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                   </select>
-                  <select value={axisY} onChange={(e) => setAxisY(e.target.value as any)} className="bg-white border p-2 rounded-lg text-xs font-bold">
+                  <select value={axisY} onChange={(e) => setAxisY(e.target.value as any)} className="bg-white border-2 border-slate-200 px-4 py-2 rounded-xl text-xs font-black">
                     {Object.entries(CHART_VARIABLES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                   </select>
                </div>
-               <div className="flex gap-2">
-                 <button onClick={toggleChartInReport} className={`px-4 py-2 rounded-lg font-black uppercase text-[10px] ${isCurrentChartInReport ? 'bg-rose-500 text-white' : 'bg-emerald-600 text-white'}`}>
-                   {isCurrentChartInReport ? "Удалить" : "В отчет"}
+               <div className="flex gap-3">
+                 <button onClick={toggleChartInReport} className={`px-6 py-3 rounded-xl font-black uppercase text-[10px] tracking-widest ${savedCharts.some(c => c.id === `${axisX}-${axisY}`) ? 'bg-rose-500 text-white' : 'bg-emerald-600 text-white'}`}>
+                   {savedCharts.some(c => c.id === `${axisX}-${axisY}`) ? "Убрать" : "В отчет"}
                  </button>
-                 <button onClick={() => setShowChartModal(false)} className="px-4 py-2 bg-slate-900 text-white rounded-lg font-black uppercase text-[10px]">X</button>
+                 <button onClick={() => setShowChartModal(false)} className="px-6 py-3 bg-slate-900 text-white rounded-xl font-black uppercase text-[10px]">Закрыть</button>
                </div>
             </div>
           </div>
@@ -580,26 +444,26 @@ const App: React.FC = () => {
       )}
 
       {showStylePicker && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl">
-            <h5 className="text-lg font-black uppercase mb-4 text-center">Выбор темы</h5>
-            <div className="grid grid-cols-1 gap-2">
+        <div className="fixed inset-0 bg-slate-900/70 flex items-center justify-center z-[80] p-4">
+          <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl">
+            <h5 className="text-lg font-black uppercase mb-6 text-center">Стиль презентации</h5>
+            <div className="grid gap-3">
               {PPT_STYLES.map(s => (
-                <button key={s.id} onClick={() => createPPTX(s)} className="p-3 rounded-xl border-2 hover:border-indigo-600 text-left flex items-center gap-3">
-                  <div className="w-4 h-4 rounded-full" style={{ background: s.primary }}></div>
-                  <span className="font-bold text-sm">{s.name}</span>
+                <button key={s.id} onClick={() => createPPTX(s)} className="p-4 rounded-2xl border-2 border-slate-100 hover:border-indigo-600 flex items-center gap-4 transition-all">
+                  <div className="w-8 h-8 rounded-lg" style={{ background: s.primary }}></div>
+                  <span className="font-black text-sm text-slate-700">{s.name}</span>
                 </button>
               ))}
             </div>
-            <button onClick={() => setShowStylePicker(false)} className="w-full mt-4 py-2 font-black text-slate-400 uppercase text-xs">Закрыть</button>
+            <button onClick={() => setShowStylePicker(false)} className="w-full mt-6 py-2 font-black text-slate-400 uppercase text-[10px]">Отмена</button>
           </div>
         </div>
       )}
 
       {isGeneratingDoc && (
-        <div className="fixed inset-0 bg-indigo-600/90 flex flex-col items-center justify-center z-[80] text-white">
-          <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin mb-4"></div>
-          <p className="text-[10px] font-black uppercase tracking-widest">Создание документа...</p>
+        <div className="fixed inset-0 bg-indigo-600/95 flex flex-col items-center justify-center z-[100] text-white">
+          <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin mb-4"></div>
+          <p className="text-xs font-black uppercase tracking-widest animate-pulse">Генерация документа...</p>
         </div>
       )}
     </div>
