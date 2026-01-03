@@ -9,6 +9,18 @@ export interface LabData {
 
 export type LabKey = keyof LabData;
 
+export interface Conclusion {
+  text: string;
+  sentiment: 'positive' | 'neutral' | 'negative';
+}
+
+export interface SavedChart {
+  id: string;
+  axisX: string;
+  axisY: string;
+  imageData: string;
+}
+
 export interface CalculationResult {
   m: number;
   q: number;

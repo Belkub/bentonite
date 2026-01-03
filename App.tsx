@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
-import { LabData, LabKey, LAB_LABELS, LAB_ORDER, CalculationResult } from './types';
+import { LabData, LabKey, LAB_LABELS, LAB_ORDER, CalculationResult, Conclusion, SavedChart } from './types';
 import { 
   extractLabDataFromImage,
   getBentoniteConclusions,
@@ -15,6 +15,16 @@ import * as docx from 'docx';
 import PptxGenJS from 'pptxgenjs';
 
 declare var Plotly: any;
+
+// Declare window extension for AIStudio
+declare global {
+  interface Window {
+    aistudio: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
+  }
+}
 
 type PPTStyle = {
   id: string;
@@ -47,7 +57,7 @@ const App: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(0);
   const [showResults, setShowResults] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [conclusions, setConclusions] = useState<string[]>([]);
+  const [conclusions, setConclusions] = useState<Conclusion[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showStylePicker, setShowStylePicker] = useState(false);
   const [isGeneratingDoc, setIsGeneratingDoc] = useState(false);
@@ -55,8 +65,30 @@ const App: React.FC = () => {
   const [showChartModal, setShowChartModal] = useState(false);
   const [axisX, setAxisX] = useState<keyof typeof CHART_VARIABLES>('f600');
   const [axisY, setAxisY] = useState<keyof typeof CHART_VARIABLES>('m');
-  const [chartImageData, setChartImageData] = useState<string | null>(null);
+  const [currentChartImage, setCurrentChartImage] = useState<string | null>(null);
+  const [savedCharts, setSavedCharts] = useState<SavedChart[]>([]);
   const chartRef = useRef<HTMLDivElement>(null);
+
+  // Mandatory API Key selection state for Gemini 3 Pro features
+  const [needsApiKey, setNeedsApiKey] = useState(false);
+
+  useEffect(() => {
+    const checkApiKey = async () => {
+      if (window.aistudio) {
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        setNeedsApiKey(!hasKey);
+      }
+    };
+    checkApiKey();
+  }, []);
+
+  const handleSelectKey = async () => {
+    if (window.aistudio) {
+      await window.aistudio.openSelectKey();
+      // Assume success after trigger to avoid race conditions
+      setNeedsApiKey(false);
+    }
+  };
 
   const results = useMemo((): CalculationResult | null => {
     const { m, q, w, f300, f600 } = labData;
@@ -100,13 +132,16 @@ const App: React.FC = () => {
     const s = manualS !== undefined ? manualS : (f600 !== 0 ? yp / f600 : 0.0001);
     const logArg = f600 * 0.001;
     const logVal = logArg > 0 ? Math.log10(logArg) : 0;
-    return (s !== 0) ? (q * 0.01 * m * 0.01 * m * Math.pow(logVal, 2)) / s : 0;
+    let res = (s !== 0) ? (q * 0.01 * m * 0.01 * m * Math.pow(logVal, 2)) / s : 0;
+    // Limit for visualization points as well
+    if (res < 30) res = 30;
+    if (res > 200) res = 200;
+    return res;
   };
 
   const generateChart = async () => {
     if (!results || !chartRef.current) return;
 
-    // Use a small delay to ensure the DOM is ready for Plotly
     await new Promise(r => setTimeout(r, 100));
 
     const xVar = CHART_VARIABLES[axisX];
@@ -162,7 +197,10 @@ const App: React.FC = () => {
       scene: {
         xaxis: { title: xVar.label },
         yaxis: { title: yVar.label },
-        zaxis: { title: 'Полнота' }
+        zaxis: { 
+          title: 'Полнота',
+          range: [30, 200] // User requirement: limit Z axis 30-200
+        }
       },
       paper_bgcolor: 'rgba(0,0,0,0)',
       plot_bgcolor: 'rgba(0,0,0,0)',
@@ -171,7 +209,7 @@ const App: React.FC = () => {
     try {
       await Plotly.newPlot(chartRef.current, data, layout, { responsive: true, displayModeBar: false });
       const img = await Plotly.toImage(chartRef.current, { format: 'png', width: 1000, height: 800 });
-      setChartImageData(img);
+      setCurrentChartImage(img);
     } catch (err) {
       console.error("Plotly error:", err);
     }
@@ -183,10 +221,24 @@ const App: React.FC = () => {
     }
   }, [showChartModal, axisX, axisY, results]);
 
-  const stateRef = useRef({ results, conclusions, chartImageData });
-  useEffect(() => {
-    stateRef.current = { results, conclusions, chartImageData };
-  }, [results, conclusions, chartImageData]);
+  const toggleChartInReport = () => {
+    if (!currentChartImage) return;
+    const chartId = `${axisX}-${axisY}`;
+    const exists = savedCharts.find(c => c.id === chartId);
+    
+    if (exists) {
+      setSavedCharts(savedCharts.filter(c => c.id !== chartId));
+    } else {
+      setSavedCharts([...savedCharts, {
+        id: chartId,
+        axisX: CHART_VARIABLES[axisX].label,
+        axisY: CHART_VARIABLES[axisY].label,
+        imageData: currentChartImage
+      }]);
+    }
+  };
+
+  const isCurrentChartInReport = savedCharts.some(c => c.id === `${axisX}-${axisY}`);
 
   const handleGetConclusions = async () => {
     if (!results) return;
@@ -194,7 +246,12 @@ const App: React.FC = () => {
     try {
       const cons = await getBentoniteConclusions(results);
       setConclusions(cons);
-    } catch (e) { console.error(e); }
+    } catch (err: any) { 
+      console.error(err);
+      if (err?.message?.includes('Requested entity was not found')) {
+        setNeedsApiKey(true);
+      }
+    }
     finally { setIsAnalyzing(false); }
   };
 
@@ -213,7 +270,8 @@ const App: React.FC = () => {
 
     const rows = [
       ["Содержание смектита (m)", `${results.m}%`],
-      ["Обменная емкость (q)", results.q],
+      // Fix: Argument of type 'number' is not assignable to parameter of type 'string'.
+      ["Обменная емкость (q)", String(results.q)],
       ["Влажность (w)", `${results.w}%`],
       ["PV (Пластическая вязкость)", results.pv.toFixed(2)],
       ["YP (Предел текучести)", results.yp.toFixed(2)],
@@ -236,25 +294,30 @@ const App: React.FC = () => {
         width: { size: 100, type: WidthType.PERCENTAGE },
         rows: [
           new TableRow({ children: [createCell("Параметр", true), createCell("Значение", true)] }),
-          ...rows.map(row => new TableRow({ children: [createCell(row[0], false, AlignmentType.LEFT), createCell(row[1], false, AlignmentType.CENTER)] }))
+          ...rows.map(row => new TableRow({ children: [createCell(row[0], false, AlignmentType.LEFT), createCell(row[1] as string, false, AlignmentType.CENTER)] }))
         ],
       }),
       new Paragraph({ text: "", spacing: { before: 400 } }),
       new Paragraph({ children: [new TextRun({ text: "ЭКСПЕРТНЫЕ ВЫВОДЫ:", bold: true, size: 28, color: "10b981" })], spacing: { after: 200 } }),
-      ...conclusions.map((c, i) => new Paragraph({ spacing: { before: 120 }, children: [new TextRun({ text: `${i + 1}. `, bold: true, color: "10b981" }), new TextRun({ text: c })] })),
+      ...conclusions.map((c, i) => new Paragraph({ spacing: { before: 120 }, children: [new TextRun({ text: `${i + 1}. `, bold: true, color: c.sentiment === 'negative' ? "b45309" : "10b981" }), new TextRun({ text: c.text })] })),
     ];
 
-    if (chartImageData) {
-      const base64 = chartImageData.split(',')[1];
+    // Include all saved charts
+    if (savedCharts.length > 0) {
       children.push(new Paragraph({ text: "", spacing: { before: 400 } }));
-      children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "ГРАФИК АНАЛИЗА ПОЛНОТЫ", bold: true, size: 28, color: "4f46e5" })] }));
-      children.push(new Paragraph({
-        alignment: AlignmentType.CENTER,
-        children: [new ImageRun({
-          data: Uint8Array.from(atob(base64), c => c.charCodeAt(0)),
-          transformation: { width: 500, height: 375 }
-        })]
-      }));
+      children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "ГРАФИЧЕСКИЙ АНАЛИЗ ПОЛНОТЫ", bold: true, size: 28, color: "4f46e5" })] }));
+      
+      savedCharts.forEach(chart => {
+        const base64 = chart.imageData.split(',')[1];
+        children.push(new Paragraph({ spacing: { before: 200 }, alignment: AlignmentType.CENTER, children: [new TextRun({ text: `Зависимость от ${chart.axisX} и ${chart.axisY}`, bold: true, size: 20 })] }));
+        children.push(new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [new ImageRun({
+            data: Uint8Array.from(atob(base64), ch => ch.charCodeAt(0)),
+            transformation: { width: 500, height: 375 }
+          })]
+        }));
+      });
     }
 
     const doc = new Document({ sections: [{ children }] });
@@ -296,11 +359,12 @@ const App: React.FC = () => {
       const labImg = await generateThematicImage('rheology lab equipment');
       if (labImg) s2.addImage({ data: labImg, x: 7, y: 2, w: 5.5, h: 3 });
 
-      if (chartImageData) {
+      // Add slides for each saved chart
+      savedCharts.forEach(chart => {
         const sChart = pptx.addSlide('MASTER_SLIDE');
-        sChart.addText('3D Анализ полноты', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
-        sChart.addImage({ data: chartImageData, x: 1, y: 1.8, w: 11, h: 5.2 });
-      }
+        sChart.addText(`3D Анализ: ${chart.axisX} vs ${chart.axisY}`, { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
+        sChart.addImage({ data: chart.imageData, x: 1, y: 1.8, w: 11, h: 5.2 });
+      });
 
       const s3 = pptx.addSlide('MASTER_SLIDE');
       s3.addText('Критерии качества', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
@@ -309,10 +373,18 @@ const App: React.FC = () => {
 
       const s4 = pptx.addSlide('MASTER_SLIDE');
       s4.addText('Экспертные выводы', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
-      conclusions.forEach((c, i) => s4.addText(`${i+1}. ${c}`, { x: 0.5, y: 2 + i * 0.7, w: 9, fontSize: 14, color: style.primary }));
+      conclusions.forEach((c, i) => {
+        const color = c.sentiment === 'negative' ? 'b45309' : style.primary;
+        s4.addText(`${i+1}. ${c.text}`, { x: 0.5, y: 2 + i * 0.7, w: 9, fontSize: 14, color });
+      });
 
       await pptx.writeFile({ fileName: 'Geolab_Analysis.pptx' });
-    } catch (e) { console.error(e); }
+    } catch (err: any) { 
+      console.error(err);
+      if (err?.message?.includes('Requested entity was not found')) {
+        setNeedsApiKey(true);
+      }
+    }
     finally { setIsGeneratingDoc(false); }
   };
 
@@ -338,6 +410,7 @@ const App: React.FC = () => {
             const scriptProcessor = audioContextInRef.current!.createScriptProcessor(4096, 1, 1);
             scriptProcessor.onaudioprocess = (e) => {
               const inputData = e.inputBuffer.getChannelData(0);
+              // Use session promise to prevent race conditions or stale closures
               sessionPromise.then(s => s.sendRealtimeInput({ media: createBlob(inputData) }));
             };
             source.connect(scriptProcessor);
@@ -347,15 +420,30 @@ const App: React.FC = () => {
             const audioData = msg.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (audioData && audioContextOutRef.current) {
               const ctx = audioContextOutRef.current;
+              // Smooth gapless playback tracking
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
               const buffer = await decodeAudioData(decode(audioData), ctx, 24000, 1);
               const source = ctx.createBufferSource();
               source.buffer = buffer;
               source.connect(ctx.destination);
+              source.addEventListener('ended', () => {
+                sourcesRef.current.delete(source);
+              });
               source.start(nextStartTimeRef.current);
               nextStartTimeRef.current += buffer.duration;
               sourcesRef.current.add(source);
             }
+            
+            // Handle audio interruption
+            const interrupted = msg.serverContent?.interrupted;
+            if (interrupted) {
+              for (const source of sourcesRef.current.values()) {
+                source.stop();
+                sourcesRef.current.delete(source);
+              }
+              nextStartTimeRef.current = 0;
+            }
+
             if (msg.serverContent?.inputTranscription) {
               const text = msg.serverContent.inputTranscription.text;
               setLiveTranscription(text);
@@ -364,7 +452,13 @@ const App: React.FC = () => {
             }
           },
           onclose: () => setIsLiveActive(false),
-          onerror: () => setIsLiveActive(false)
+          onerror: (err: any) => {
+            console.error(err);
+            setIsLiveActive(false);
+            if (err?.message?.includes('Requested entity was not found')) {
+              setNeedsApiKey(true);
+            }
+          }
         }
       });
       sessionRef.current = await sessionPromise;
@@ -378,6 +472,27 @@ const App: React.FC = () => {
   const audioContextOutRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef(0);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+
+  // Show mandatory API key selection screen
+  if (needsApiKey) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 text-white text-center">
+        <div className="max-w-md space-y-6">
+          <h1 className="text-4xl font-black tracking-tighter">GeoLab<span className="text-indigo-500">Pro</span></h1>
+          <p className="text-slate-400">Для работы с профессиональными моделями анализа (Gemini 3 Pro) необходимо выбрать API ключ с активированным биллингом.</p>
+          <button 
+            onClick={handleSelectKey}
+            className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 rounded-2xl font-black uppercase tracking-widest shadow-xl transition-all"
+          >
+            Выбрать API Ключ
+          </button>
+          <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="block text-xs text-indigo-400 hover:underline">
+            Подробнее о биллинге и ключах
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 p-3 md:p-5 text-slate-900 font-sans text-left">
@@ -398,10 +513,18 @@ const App: React.FC = () => {
                 setIsUploading(true);
                 const reader = new FileReader();
                 reader.onloadend = async () => {
-                  const base64 = (reader.result as string).split(',')[1];
-                  const ext = await extractLabDataFromImage(base64);
-                  setLabData(prev => ({ ...prev, ...ext }));
-                  setIsUploading(false);
+                  try {
+                    const base64 = (reader.result as string).split(',')[1];
+                    const ext = await extractLabDataFromImage(base64);
+                    setLabData(prev => ({ ...prev, ...ext }));
+                  } catch (err: any) {
+                    console.error(err);
+                    if (err?.message?.includes('Requested entity was not found')) {
+                      setNeedsApiKey(true);
+                    }
+                  } finally {
+                    setIsUploading(false);
+                  }
                 };
                 reader.readAsDataURL(file);
               }} />
@@ -448,7 +571,7 @@ const App: React.FC = () => {
                 <div className="flex gap-2">
                   <button onClick={() => setShowChartModal(true)} className="bg-emerald-500 hover:bg-emerald-600 text-white px-5 py-2 rounded-lg text-xs font-black uppercase transition-all shadow-lg flex items-center gap-2">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path></svg>
-                    Графики
+                    Графики ({savedCharts.length})
                   </button>
                   <button onClick={exportWord} className="bg-white/20 hover:bg-white/40 px-3 py-2 rounded-lg text-[10px] font-black uppercase transition-all">Word</button>
                   <button onClick={() => setShowStylePicker(true)} className="bg-white text-indigo-700 px-4 py-2 rounded-lg text-[10px] font-black uppercase shadow-lg hover:bg-slate-50 transition-all">Презентация</button>
@@ -485,12 +608,19 @@ const App: React.FC = () => {
               </div>
               <div className="space-y-3">
                 {conclusions.length === 0 && !isAnalyzing && <p className="text-center text-slate-400 py-10 italic">Нажмите кнопку выше для формирования экспертных выводов</p>}
-                {conclusions.map((c, i) => (
-                  <div key={i} className="flex gap-4 p-4 bg-emerald-50/30 rounded-2xl border border-emerald-100/50 hover:bg-white transition-all shadow-sm">
-                    <span className="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center font-black">{i+1}</span>
-                    <p className="text-sm font-semibold text-slate-700 leading-relaxed">{c}</p>
-                  </div>
-                ))}
+                {conclusions.map((c, i) => {
+                  const isNegative = c.sentiment === 'negative';
+                  const bgColor = isNegative ? 'bg-amber-50/70 border-amber-200' : 'bg-emerald-50/70 border-emerald-200';
+                  const dotColor = isNegative ? 'bg-amber-600' : 'bg-emerald-600';
+                  const textColor = isNegative ? 'text-amber-900' : 'text-emerald-900';
+                  
+                  return (
+                    <div key={i} className={`flex gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm ${bgColor}`}>
+                      <span className={`flex-shrink-0 w-8 h-8 rounded-full text-white flex items-center justify-center font-black ${dotColor}`}>{i+1}</span>
+                      <p className={`text-sm font-semibold leading-relaxed ${textColor}`}>{c.text}</p>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -518,9 +648,36 @@ const App: React.FC = () => {
                     {Object.entries(CHART_VARIABLES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                   </select>
                 </div>
+
+                <div className="space-y-3 pt-4">
+                  <button 
+                    onClick={toggleChartInReport}
+                    className={`w-full py-4 rounded-xl font-black uppercase text-xs tracking-widest shadow-lg transition-all flex items-center justify-center gap-2 ${
+                      isCurrentChartInReport 
+                        ? 'bg-rose-500 text-white hover:bg-rose-600' 
+                        : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                    }`}
+                  >
+                    {isCurrentChartInReport ? (
+                      <>
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd"></path></svg>
+                        Исключить из отчета
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd"></path></svg>
+                        Включить в отчет
+                      </>
+                    )}
+                  </button>
+                  <p className="text-[10px] text-center text-slate-400 font-bold uppercase tracking-tighter">
+                    Выбрано графиков для отчета: {savedCharts.length}
+                  </p>
+                </div>
+
                 <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 mt-4 space-y-2">
                   <p className="text-[11px] text-indigo-900 font-bold leading-relaxed">
-                    Этот инструмент строит поверхность зависимости <span className="text-indigo-600">Критерия Полноты</span> от выбранных параметров.
+                    Диапазон Z-оси ограничен: <span className="text-indigo-600">30 - 200</span>
                   </p>
                   <p className="text-[10px] text-slate-500 font-medium italic">
                     Диапазоны: f600 (15-120), YP (5-60), m (40-100), q (40-120).
@@ -530,7 +687,6 @@ const App: React.FC = () => {
               <button onClick={() => setShowChartModal(false)} className="mt-8 w-full py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl hover:bg-black transition-all">Закрыть окно</button>
             </div>
             <div className="flex-grow flex items-center justify-center bg-white p-4 relative min-h-0 overflow-hidden">
-               {/* Plotly container */}
                <div ref={chartRef} className="w-full h-full"></div>
             </div>
           </div>

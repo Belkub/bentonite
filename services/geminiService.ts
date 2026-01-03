@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Modality, Type, GenerateContentResponse } from "@google/genai";
-import { LabData, CalculationResult } from "../types";
+import { LabData, CalculationResult, Conclusion } from "../types";
 
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
@@ -27,7 +27,7 @@ export async function extractLabDataFromImage(base64Image: string): Promise<Part
   }
 }
 
-export async function getBentoniteConclusions(results: CalculationResult): Promise<string[]> {
+export async function getBentoniteConclusions(results: CalculationResult): Promise<Conclusion[]> {
   const ai = getAI();
   const prompt = `Проведи экспертный анализ бентонита для органомодификации на основе данных и критериев из тех. регламента:
   ДАННЫЕ:
@@ -47,7 +47,8 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
   5. Полнота: Приемлемо 100-115, Хорошо > 115.
 
   ЗАДАЧА: Сформулируй ровно 5 экспертных выводов о качестве и пригодности этой глины для органомодификации катионными ПАВ. Обоснуй каждый пункт конкретными значениями.
-  Верни ответ в формате JSON: {"conclusions": ["вывод 1", "вывод 2", "вывод 3", "вывод 4", "вывод 5"]}`;
+  Классифицируй каждый вывод по тональности: "positive", "neutral" или "negative".
+  Верни ответ в формате JSON: {"conclusions": [{"text": "вывод 1", "sentiment": "positive"}, ...]}`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
@@ -61,7 +62,7 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
     const data = JSON.parse(response.text || '{"conclusions":[]}');
     return data.conclusions || [];
   } catch (e) {
-    return ["Ошибка анализа данных. Пожалуйста, проверьте ввод."];
+    return [{ text: "Ошибка анализа данных. Пожалуйста, проверьте ввод.", sentiment: "negative" }];
   }
 }
 
