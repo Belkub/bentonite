@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
 import { LabData, LabKey, LAB_LABELS, LAB_ORDER, CalculationResult, Conclusion, SavedChart } from './types';
@@ -14,7 +15,7 @@ import PptxGenJS from 'pptxgenjs';
 
 declare var Plotly: any;
 
-// Renamed interface to match existing global type declaration for window.aistudio
+// Используем интерфейс, соответствующий глобальным типам среды AI Studio
 interface AIStudio {
   hasSelectedApiKey(): Promise<boolean>;
   openSelectKey(): Promise<void>;
@@ -22,7 +23,6 @@ interface AIStudio {
 
 declare global {
   interface Window {
-    // Property 'aistudio' must match the expected type name 'AIStudio' in the global scope
     aistudio?: AIStudio;
   }
 }
@@ -73,11 +73,15 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const checkKey = async () => {
-      // Только если мы в среде AI Studio
+      // Только в среде AI Studio
       if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
-        const hasKey = await window.aistudio.hasSelectedApiKey();
-        if (!hasKey && typeof window.aistudio.openSelectKey === 'function') {
-          await window.aistudio.openSelectKey();
+        try {
+          const hasKey = await window.aistudio.hasSelectedApiKey();
+          if (!hasKey && typeof window.aistudio.openSelectKey === 'function') {
+            await window.aistudio.openSelectKey();
+          }
+        } catch (err) {
+          console.warn("AI Studio key check skipped:", err);
         }
       }
     };
@@ -215,7 +219,8 @@ const App: React.FC = () => {
     if (savedCharts.length > 0) {
       children.push(new Paragraph({ text: "", spacing: { before: 400 } }));
       savedCharts.forEach(chart => {
-        children.push(new Paragraph({ alignment: "center", children: [new ImageRun({ data: base64ToUint8Array(chart.imageData.split(',')[1]), transformation: { width: 500, height: 375 } })] }));
+        // Fix: Cast ImageRun options to any to bypass union type ambiguity in browser environment
+        children.push(new Paragraph({ alignment: "center", children: [new ImageRun({ data: base64ToUint8Array(chart.imageData.split(',')[1]), transformation: { width: 500, height: 375 } } as any)] }));
       });
     }
     const blob = await Packer.toBlob(new Document({ sections: [{ children }] }));
@@ -231,7 +236,15 @@ const App: React.FC = () => {
       const s1 = pptx.addSlide({ masterName: 'MASTER' });
       s1.addText('Технический отчет по качеству бентонита', { x: 1, y: 2, w: 11, fontSize: 36, bold: true, color: style.primary });
       const s2 = pptx.addSlide({ masterName: 'MASTER' });
-      s2.addTable([['Параметр', 'Значение'], ['Смектит', `${results.m}%`], ['КОЕ', String(results.q)], ['PV', results.pv.toFixed(2)], ['YP', results.yp.toFixed(2)], ['Полнота', results.completeness.toFixed(2)]], { x: 0.5, y: 1.5, w: 12, border: { pt: 1, color: style.secondary }, fill: { color: 'ffffff' } });
+      // Fix: Use object format for TableCell to satisfy stricter PptxGenJS types
+      s2.addTable([
+        [{ text: 'Параметр' }, { text: 'Значение' }],
+        [{ text: 'Смектит' }, { text: `${results.m}%` }],
+        [{ text: 'КОЕ' }, { text: String(results.q) }],
+        [{ text: 'PV' }, { text: results.pv.toFixed(2) }],
+        [{ text: 'YP' }, { text: results.yp.toFixed(2) }],
+        [{ text: 'Полнота' }, { text: results.completeness.toFixed(2) }]
+      ], { x: 0.5, y: 1.5, w: 12, border: { pt: 1, color: style.secondary }, fill: { color: 'ffffff' } });
       savedCharts.forEach(chart => { const sc = pptx.addSlide({ masterName: 'MASTER' }); sc.addImage({ data: chart.imageData, x: 1, y: 1, w: 11, h: 5.5 }); });
       await pptx.writeFile({ fileName: 'Geolab_Analysis.pptx' });
     } finally { setIsGeneratingDoc(false); }
@@ -440,7 +453,7 @@ const App: React.FC = () => {
 
       {showStylePicker && (
         <div className="fixed inset-0 bg-slate-900/70 flex items-center justify-center z-[80] p-4">
-          <div className="bg-white w-full max-sm rounded-[2.5rem] p-8 shadow-2xl">
+          <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl">
             <h5 className="text-lg font-black uppercase mb-6 text-center">Стиль презентации</h5>
             <div className="grid gap-3">
               {PPT_STYLES.map(s => (
