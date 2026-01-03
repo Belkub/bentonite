@@ -84,7 +84,7 @@ const App: React.FC = () => {
     const generation = (q_val !== 0 && f6_val !== 0) 
       ? f6_val * (1 - (yp / f6_val)) * m_val / q_val 
       : 0;
-    const thickening = (m_val !== 0 && q_val !== 0) ? f6_val / (0.01 * 0.01 * m_val * m_val * q_val) : 0;
+    const thickening = (m_val !== 0 && q_val !== 0) ? f600 ? f6_val / (0.01 * 0.01 * m_val * m_val * q_val) : 0 : 0;
     const logArg = f6_val * 0.001;
     const logVal = logArg > 0 ? Math.log10(logArg) : 0;
     const completeness = (s !== 0) 
@@ -220,7 +220,7 @@ const App: React.FC = () => {
 
   const exportWord = async () => {
     if (!results) return;
-    const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, VerticalAlign, ImageRun } = docx;
+    const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, VerticalAlign, ImageRun } = docx;
 
     const base64ToUint8Array = (base64: string) => {
       const binaryString = window.atob(base64);
@@ -238,7 +238,7 @@ const App: React.FC = () => {
         alignment: align
       })],
       verticalAlign: VerticalAlign.CENTER,
-      padding: { top: 100, bottom: 100, left: 100, right: 100 }
+      margins: { top: 100, bottom: 100, left: 100, right: 100 }
     });
 
     const rows = [
@@ -337,7 +337,7 @@ const App: React.FC = () => {
       const s2 = pptx.addSlide('MASTER_SLIDE');
       s2.addText('Результаты измерений', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
       const rows = [['Параметр', 'Значение'], ['Смектит (m)', `${results.m}%`], ['КОЕ (q)', String(results.q)], ['PV', results.pv.toFixed(2)], ['YP', results.yp.toFixed(2)], ['YP/PV', results.ypPvRatio.toFixed(2)]];
-      s2.addTable(rows, { x: 0.5, y: 2, w: 10, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
+      pptx.addTable(rows as any, { x: 0.5, y: 2, w: 10, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
 
       savedCharts.forEach(chart => {
         const sChart = pptx.addSlide('MASTER_SLIDE');
@@ -348,7 +348,7 @@ const App: React.FC = () => {
       const s3 = pptx.addSlide('MASTER_SLIDE');
       s3.addText('Критерии качества', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
       const critRows = [['Критерий', 'Значение', 'Оценка'], ['Изотропия', results.isotropy.toFixed(4), results.isotropy >= 0.24 ? 'Ок' : 'Низкая'], ['Генерация', results.generation.toFixed(2), results.generation > 8.5 ? 'Высокая' : 'Низкая'], ['Загущение', results.thickening.toFixed(2), results.thickening < 1.3 ? 'Оптимально' : 'Высокое'], ['Полнота', results.completeness.toFixed(2), results.completeness > 115 ? 'Идеально' : 'Средне']];
-      s3.addTable(critRows, { x: 0.5, y: 2, w: 12, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
+      pptx.addTable(critRows as any, { x: 0.5, y: 2, w: 12, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
 
       const s4 = pptx.addSlide('MASTER_SLIDE');
       s4.addText('Экспертные выводы', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
@@ -390,7 +390,8 @@ const App: React.FC = () => {
             scriptProcessor.connect(audioContextInRef.current!.destination);
           },
           onmessage: async (msg: LiveServerMessage) => {
-            const audioData = msg.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+            const parts = msg.serverContent?.modelTurn?.parts;
+            const audioData = parts && parts[0]?.inlineData?.data;
             if (audioData && audioContextOutRef.current) {
               const ctx = audioContextOutRef.current;
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
@@ -415,8 +416,8 @@ const App: React.FC = () => {
             }
             if (msg.serverContent?.inputTranscription) {
               const text = msg.serverContent.inputTranscription.text;
-              setLiveTranscription(text);
-              const parsed = parseSpokenNumber(text);
+              setLiveTranscription(text ?? '');
+              const parsed = parseSpokenNumber(text ?? '');
               if (parsed !== null) setLabData(prev => ({ ...prev, [LAB_ORDER[currentStep]]: parsed.toString() }));
             }
           },
