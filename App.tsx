@@ -16,18 +16,6 @@ import PptxGenJS from 'pptxgenjs';
 
 declare var Plotly: any;
 
-/**
- * Augment the global AIStudio interface to provide type definitions for the specialized
- * API key selection methods provided by the environment. This avoids conflicts with
- * existing property declarations on the Window interface.
- */
-declare global {
-  interface AIStudio {
-    hasSelectedApiKey(): Promise<boolean>;
-    openSelectKey(): Promise<void>;
-  }
-}
-
 type PPTStyle = {
   id: string;
   name: string;
@@ -70,30 +58,6 @@ const App: React.FC = () => {
   const [currentChartImage, setCurrentChartImage] = useState<string | null>(null);
   const [savedCharts, setSavedCharts] = useState<SavedChart[]>([]);
   const chartRef = useRef<HTMLDivElement>(null);
-
-  // Mandatory API Key selection state for Gemini 3 Pro features
-  const [needsApiKey, setNeedsApiKey] = useState(false);
-
-  useEffect(() => {
-    const checkApiKey = async () => {
-      // Use window access for aistudio with the augmented type
-      const aistudio = (window as any).aistudio as AIStudio | undefined;
-      if (aistudio) {
-        const hasKey = await aistudio.hasSelectedApiKey();
-        setNeedsApiKey(!hasKey);
-      }
-    };
-    checkApiKey();
-  }, []);
-
-  const handleSelectKey = async () => {
-    const aistudio = (window as any).aistudio as AIStudio | undefined;
-    if (aistudio) {
-      await aistudio.openSelectKey();
-      // Assume success after trigger to avoid race conditions
-      setNeedsApiKey(false);
-    }
-  };
 
   const results = useMemo((): CalculationResult | null => {
     const { m, q, w, f300, f600 } = labData;
@@ -138,7 +102,6 @@ const App: React.FC = () => {
     const logArg = f600 * 0.001;
     const logVal = logArg > 0 ? Math.log10(logArg) : 0;
     let res = (s !== 0) ? (q * 0.01 * m * 0.01 * m * Math.pow(logVal, 2)) / s : 0;
-    // Limit for visualization points as well
     if (res < 30) res = 30;
     if (res > 200) res = 200;
     return res;
@@ -204,7 +167,7 @@ const App: React.FC = () => {
         yaxis: { title: yVar.label },
         zaxis: { 
           title: 'Полнота',
-          range: [30, 200] // User requirement: limit Z axis 30-200
+          range: [30, 200]
         }
       },
       paper_bgcolor: 'rgba(0,0,0,0)',
@@ -251,12 +214,7 @@ const App: React.FC = () => {
     try {
       const cons = await getBentoniteConclusions(results);
       setConclusions(cons);
-    } catch (err: any) { 
-      console.error(err);
-      if (err?.message?.includes('Requested entity was not found')) {
-        setNeedsApiKey(true);
-      }
-    }
+    } catch (err) { console.error(err); }
     finally { setIsAnalyzing(false); }
   };
 
@@ -264,7 +222,6 @@ const App: React.FC = () => {
     if (!results) return;
     const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, VerticalAlign, ImageRun } = docx;
 
-    // Helper to safely convert base64 to Uint8Array for Word binary images
     const base64ToUint8Array = (base64: string) => {
       const binaryString = window.atob(base64);
       const len = binaryString.length;
@@ -328,7 +285,6 @@ const App: React.FC = () => {
       })),
     ];
 
-    // Include all saved charts
     if (savedCharts.length > 0) {
       children.push(new Paragraph({ text: "", spacing: { before: 400 } }));
       children.push(new Paragraph({ alignment: "center", children: [new TextRun({ text: "ГРАФИЧЕСКИЙ АНАЛИЗ ПОЛНОТЫ", bold: true, size: 28, color: "4f46e5" })] }));
@@ -377,17 +333,12 @@ const App: React.FC = () => {
 
       const s1 = pptx.addSlide('MASTER_SLIDE');
       s1.addText('Анализ качества и пригодности\nбентонита', { x: 1, y: 1.5, w: 8, fontSize: 36, bold: true, color: style.primary });
-      const introImg = await generateThematicImage('scientific analysis of minerals clay');
-      if (introImg) s1.addImage({ data: introImg, x: 8, y: 1.5, w: 5, h: 4 });
 
       const s2 = pptx.addSlide('MASTER_SLIDE');
       s2.addText('Результаты измерений', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
       const rows = [['Параметр', 'Значение'], ['Смектит (m)', `${results.m}%`], ['КОЕ (q)', String(results.q)], ['PV', results.pv.toFixed(2)], ['YP', results.yp.toFixed(2)], ['YP/PV', results.ypPvRatio.toFixed(2)]];
-      s2.addTable(rows, { x: 0.5, y: 2, w: 6, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
-      const labImg = await generateThematicImage('rheology lab equipment');
-      if (labImg) s2.addImage({ data: labImg, x: 7, y: 2, w: 5.5, h: 3 });
+      s2.addTable(rows, { x: 0.5, y: 2, w: 10, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
 
-      // Add slides for each saved chart
       savedCharts.forEach(chart => {
         const sChart = pptx.addSlide('MASTER_SLIDE');
         sChart.addText(`3D Анализ: ${chart.axisX} vs ${chart.axisY}`, { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
@@ -407,12 +358,7 @@ const App: React.FC = () => {
       });
 
       await pptx.writeFile({ fileName: 'Geolab_Analysis.pptx' });
-    } catch (err: any) { 
-      console.error(err);
-      if (err?.message?.includes('Requested entity was not found')) {
-        setNeedsApiKey(true);
-      }
-    }
+    } catch (err) { console.error(err); }
     finally { setIsGeneratingDoc(false); }
   };
 
@@ -438,7 +384,6 @@ const App: React.FC = () => {
             const scriptProcessor = audioContextInRef.current!.createScriptProcessor(4096, 1, 1);
             scriptProcessor.onaudioprocess = (e) => {
               const inputData = e.inputBuffer.getChannelData(0);
-              // Use session promise to prevent race conditions or stale closures
               sessionPromise.then(s => s.sendRealtimeInput({ media: createBlob(inputData) }));
             };
             source.connect(scriptProcessor);
@@ -448,7 +393,6 @@ const App: React.FC = () => {
             const audioData = msg.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (audioData && audioContextOutRef.current) {
               const ctx = audioContextOutRef.current;
-              // Smooth gapless playback tracking
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
               const buffer = await decodeAudioData(decode(audioData), ctx, 24000, 1);
               const source = ctx.createBufferSource();
@@ -461,8 +405,6 @@ const App: React.FC = () => {
               nextStartTimeRef.current += buffer.duration;
               sourcesRef.current.add(source);
             }
-            
-            // Handle audio interruption
             const interrupted = msg.serverContent?.interrupted;
             if (interrupted) {
               for (const source of sourcesRef.current.values()) {
@@ -471,7 +413,6 @@ const App: React.FC = () => {
               }
               nextStartTimeRef.current = 0;
             }
-
             if (msg.serverContent?.inputTranscription) {
               const text = msg.serverContent.inputTranscription.text;
               setLiveTranscription(text);
@@ -480,13 +421,7 @@ const App: React.FC = () => {
             }
           },
           onclose: () => setIsLiveActive(false),
-          onerror: (err: any) => {
-            console.error(err);
-            setIsLiveActive(false);
-            if (err?.message?.includes('Requested entity was not found')) {
-              setNeedsApiKey(true);
-            }
-          }
+          onerror: () => setIsLiveActive(false)
         }
       });
       sessionRef.current = await sessionPromise;
@@ -500,27 +435,6 @@ const App: React.FC = () => {
   const audioContextOutRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef(0);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-
-  // Show mandatory API key selection screen
-  if (needsApiKey) {
-    return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 text-white text-center">
-        <div className="max-w-md space-y-6">
-          <h1 className="text-4xl font-black tracking-tighter">GeoLab<span className="text-indigo-500">Pro</span></h1>
-          <p className="text-slate-400">Для работы с профессиональными моделями анализа (Gemini 3 Pro) необходимо выбрать API ключ с активированным биллингом.</p>
-          <button 
-            onClick={handleSelectKey}
-            className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 rounded-2xl font-black uppercase tracking-widest shadow-xl transition-all"
-          >
-            Выбрать API Ключ
-          </button>
-          <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="block text-xs text-indigo-400 hover:underline">
-            Подробнее о биллинге и ключах
-          </a>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-slate-50 p-3 md:p-5 text-slate-900 font-sans text-left">
@@ -545,14 +459,8 @@ const App: React.FC = () => {
                     const base64 = (reader.result as string).split(',')[1];
                     const ext = await extractLabDataFromImage(base64);
                     setLabData(prev => ({ ...prev, ...ext }));
-                  } catch (err: any) {
-                    console.error(err);
-                    if (err?.message?.includes('Requested entity was not found')) {
-                      setNeedsApiKey(true);
-                    }
-                  } finally {
-                    setIsUploading(false);
-                  }
+                  } catch (err) { console.error(err); } 
+                  finally { setIsUploading(false); }
                 };
                 reader.readAsDataURL(file);
               }} />
@@ -678,41 +586,21 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="space-y-3 pt-4">
-                  <button 
-                    onClick={toggleChartInReport}
-                    className={`w-full py-4 rounded-xl font-black uppercase text-xs tracking-widest shadow-lg transition-all flex items-center justify-center gap-2 ${
-                      isCurrentChartInReport 
-                        ? 'bg-rose-500 text-white hover:bg-rose-600' 
-                        : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                    }`}
-                  >
+                  <button onClick={toggleChartInReport} className={`w-full py-4 rounded-xl font-black uppercase text-xs tracking-widest shadow-lg transition-all flex items-center justify-center gap-2 ${isCurrentChartInReport ? 'bg-rose-500 text-white hover:bg-rose-600' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}>
                     {isCurrentChartInReport ? (
-                      <>
-                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd"></path></svg>
-                        Исключить из отчета
-                      </>
+                      <><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd"></path></svg>Исключить</>
                     ) : (
-                      <>
-                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd"></path></svg>
-                        Включить в отчет
-                      </>
+                      <><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd"></path></svg>В отчет</>
                     )}
                   </button>
-                  <p className="text-[10px] text-center text-slate-400 font-bold uppercase tracking-tighter">
-                    Выбрано графиков для отчета: {savedCharts.length}
-                  </p>
+                  <p className="text-[10px] text-center text-slate-400 font-bold uppercase tracking-tighter">Сохранено: {savedCharts.length}</p>
                 </div>
 
                 <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 mt-4 space-y-2">
-                  <p className="text-[11px] text-indigo-900 font-bold leading-relaxed">
-                    Диапазон Z-оси ограничен: <span className="text-indigo-600">30 - 200</span>
-                  </p>
-                  <p className="text-[10px] text-slate-500 font-medium italic">
-                    Диапазоны: f600 (15-120), YP (5-60), m (40-100), q (40-120).
-                  </p>
+                  <p className="text-[11px] text-indigo-900 font-bold leading-relaxed">Диапазон Z-оси: <span className="text-indigo-600">30 - 200</span></p>
                 </div>
               </div>
-              <button onClick={() => setShowChartModal(false)} className="mt-8 w-full py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl hover:bg-black transition-all">Закрыть окно</button>
+              <button onClick={() => setShowChartModal(false)} className="mt-8 w-full py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl hover:bg-black transition-all">Закрыть</button>
             </div>
             <div className="flex-grow flex items-center justify-center bg-white p-4 relative min-h-0 overflow-hidden">
                <div ref={chartRef} className="w-full h-full"></div>

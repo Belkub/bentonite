@@ -6,23 +6,19 @@ const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export async function extractLabDataFromImage(base64Image: string): Promise<Partial<LabData>> {
   const ai = getAI();
+  // Using Flash model instead of Pro for free-tier compatibility
   const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-image-preview',
+    model: 'gemini-3-flash-preview',
     contents: {
       parts: [
         { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
         { text: 'Analyze this image and extract laboratory data for clay testing. Look for: Smectite content (содержание смектита), Cation Exchange Capacity (обменная емкость/КОЕ), Humidity/Water content (влажность), and rheometer readings at 300 and 600 RPM (Фи 300, Фи 600). Return ONLY a JSON object with keys "m", "q", "w", "f300", "f600" and their numeric values. If a value is missing, use null.' }
       ]
-    },
-    config: {
-      // responseMimeType is not supported for gemini-3-pro-image-preview (nano banana series)
     }
   });
 
   try {
-    // Attempt to parse JSON from the extracted text.
     const text = response.text || '{}';
-    // Clean up potential markdown code blocks returned by the model
     const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
     return JSON.parse(jsonStr);
   } catch (e) {
@@ -70,28 +66,10 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
   }
 }
 
+/**
+ * Image generation often requires a paid key or high-tier account.
+ * We'll disable it to ensure the app works for everyone.
+ */
 export async function generateThematicImage(topic: string): Promise<string | null> {
-  const ai = getAI();
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: {
-        parts: [{ text: `A professional, high-quality laboratory setting image showing ${topic} related to clay mineralogy, bentonite, and chemical analysis. Photorealistic style, scientific atmosphere, clean lab equipment.` }]
-      },
-      config: {
-        imageConfig: {
-          aspectRatio: "16:9"
-        }
-      }
-    });
-
-    for (const part of response.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData) {
-        return `data:image/png;base64,${part.inlineData.data}`;
-      }
-    }
-  } catch (e) {
-    console.error("Image generation failed", e);
-  }
   return null;
 }
