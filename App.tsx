@@ -278,8 +278,8 @@ const App: React.FC = () => {
       new Paragraph({ text: "", spacing: { before: 400 } }),
       new Paragraph({ children: [new TextRun({ text: "ЭКСПЕРТНЫЕ ВЫВОДЫ:", bold: true, size: 28, color: "10b981" })], spacing: { after: 200 } }),
       ...conclusions.map((c, i) => {
-        const sentValue = c.sentiment?.toLowerCase().trim() || 'neutral';
-        const isNeg = sentValue === 'negative' || sentValue.includes('негат');
+        const sRaw = c.sentiment?.toLowerCase().trim() || 'neutral';
+        const isNeg = sRaw.includes('neg') || sRaw.includes('нег') || sRaw.includes('плох') || sRaw.includes('bad');
         return new Paragraph({ 
           spacing: { before: 120 }, 
           children: [
@@ -353,8 +353,8 @@ const App: React.FC = () => {
       const s4 = pptx.addSlide({ masterName: 'MASTER_SLIDE' });
       s4.addText('Экспертные выводы', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
       conclusions.forEach((c, i) => {
-        const sv = c.sentiment?.toLowerCase().trim() || 'neutral';
-        const isN = sv === 'negative' || sv.includes('негат');
+        const sVal = c.sentiment?.toLowerCase().trim() || 'neutral';
+        const isN = sVal.includes('neg') || sVal.includes('нег') || sVal.includes('bad');
         const color = isN ? 'b45309' : style.primary;
         s4.addText(`${i+1}. ${c.text}`, { x: 0.5, y: 2 + i * 0.7, w: 9, fontSize: 14, color });
       });
@@ -547,19 +547,19 @@ const App: React.FC = () => {
               <div className="space-y-3">
                 {conclusions.length === 0 && !isAnalyzing && <p className="text-center text-slate-400 py-10 italic">Нажмите кнопку выше для формирования экспертных выводов</p>}
                 {conclusions.map((c, i) => {
-                  // Нормализуем sentiment для более точного сравнения
-                  const sentimentRaw = c.sentiment?.toLowerCase().trim() || 'neutral';
-                  const isNegative = sentimentRaw === 'negative' || sentimentRaw.includes('негат');
+                  // Прямое сопоставление sentiment. Если sentiment содержит "neg", "нег", "bad" или "плох" — считаем негативным.
+                  const s = c.sentiment?.toLowerCase().trim() || 'neutral';
+                  const isNegative = s.includes('neg') || s.includes('нег') || s.includes('bad') || s.includes('плох');
                   
-                  // Прямые классы Tailwind для фонов, чтобы CDN версия их точно применила
-                  const bgColorClass = isNegative ? 'bg-amber-100 border-amber-200' : 'bg-emerald-100 border-emerald-200';
-                  const dotColorClass = isNegative ? 'bg-amber-600' : 'bg-emerald-600';
-                  const textColorClass = isNegative ? 'text-amber-900' : 'text-emerald-900';
+                  // Оранжево-коричневая гамма для негатива, изумрудная для позитива/нейтрали
+                  const bg = isNegative ? 'bg-orange-100 border-orange-200 shadow-orange-100/50' : 'bg-emerald-100 border-emerald-200 shadow-emerald-100/50';
+                  const dot = isNegative ? 'bg-orange-600' : 'bg-emerald-600';
+                  const text = isNegative ? 'text-orange-900' : 'text-emerald-900';
                   
                   return (
-                    <div key={i} className={`flex gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm ${bgColorClass}`}>
-                      <span className={`flex-shrink-0 w-8 h-8 rounded-full text-white flex items-center justify-center font-black ${dotColorClass}`}>{i+1}</span>
-                      <p className={`text-sm font-semibold leading-relaxed ${textColorClass}`}>{c.text}</p>
+                    <div key={i} className={`flex gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm ${bg}`}>
+                      <span className={`flex-shrink-0 w-8 h-8 rounded-full text-white flex items-center justify-center font-black ${dot}`}>{i+1}</span>
+                      <p className={`text-sm font-semibold leading-relaxed ${text}`}>{c.text}</p>
                     </div>
                   );
                 })}

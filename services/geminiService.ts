@@ -39,7 +39,7 @@ export async function extractLabDataFromImage(base64Image: string): Promise<Part
 export async function getBentoniteConclusions(results: CalculationResult): Promise<Conclusion[]> {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
-  const prompt = `Проведи экспертный анализ бентонита для органомодификации на основе данных и критериев:
+  const prompt = `Проведи строгий экспертный анализ бентонита.
   ДАННЫЕ:
   - Содержание смектита (m): ${results.m}%
   - Обменная емкость (q/КОЕ): ${results.q} мг-экв/100г
@@ -49,14 +49,17 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
   - Критерий загущения: ${results.thickening.toFixed(2)}
   - Критерий полноты: ${results.completeness.toFixed(2)}
 
-  ЭКСПЕРТНЫЕ КРИТЕРИИ:
-  1. YP/PV: >6 (сода), 3-6 (OCMA), 1.5-3 (Drilling grade), <1.5 (non treated).
-  2. Изотропия: >= 0.24 (хорошо).
-  3. Генерация: > 8.5 (хорошо).
-  4. Загущение: < 1 (отлично), 1-1.3 (приемлемо).
-  5. Полнота: 100-115 (норма), > 115 (отлично).
+  КРИТЕРИИ ОЦЕНКИ (будь критичен!):
+  1. YP/PV: <1.5 или >6 часто указывает на проблемы (необработанный или пересоленный).
+  2. Изотропия: < 0.24 — это ПЛОХО (negative).
+  3. Генерация: < 8.5 — это НИЗКИЙ потенциал (negative).
+  4. Загущение: > 1.3 — слишком высокое, возможны трудности (negative).
+  5. Полнота: < 100 — недостаточное качество (negative).
 
-  ЗАДАЧА: Сформулируй ровно 5 экспертных выводов. Классифицируй каждый: "positive", "neutral" или "negative".`;
+  ЗАДАЧА: Сформулируй 5 выводов. 
+  Для каждого вывода ОПАСНОСТЬ или НЕДОСТАТОК классифицируй ТОЛЬКО как "negative".
+  Хорошие показатели — "positive". Спорные — "neutral".
+  Используй только эти три слова для sentiment.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -73,7 +76,7 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
                 type: Type.OBJECT,
                 properties: {
                   text: { type: Type.STRING },
-                  sentiment: { type: Type.STRING }
+                  sentiment: { type: Type.STRING, description: "Strictly 'positive', 'neutral', or 'negative'" }
                 },
                 required: ["text", "sentiment"]
               }
