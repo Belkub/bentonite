@@ -547,19 +547,18 @@ const App: React.FC = () => {
               <div className="space-y-3">
                 {conclusions.length === 0 && !isAnalyzing && <p className="text-center text-slate-400 py-10 italic">Нажмите кнопку выше для формирования экспертных выводов</p>}
                 {conclusions.map((c, i) => {
-                  // Прямое сопоставление sentiment. Если sentiment содержит "neg", "нег", "bad" или "плох" — считаем негативным.
                   const s = c.sentiment?.toLowerCase().trim() || 'neutral';
                   const isNegative = s.includes('neg') || s.includes('нег') || s.includes('bad') || s.includes('плох');
                   
-                  // Оранжево-коричневая гамма для негатива, изумрудная для позитива/нейтрали
-                  const bg = isNegative ? 'bg-orange-100 border-orange-200 shadow-orange-100/50' : 'bg-emerald-100 border-emerald-200 shadow-emerald-100/50';
-                  const dot = isNegative ? 'bg-orange-600' : 'bg-emerald-600';
-                  const text = isNegative ? 'text-orange-900' : 'text-emerald-900';
+                  // ПРИНУДИТЕЛЬНОЕ ИСПОЛЬЗОВАНИЕ ЯРКИХ ЦВЕТОВ: amber (коричневый оттенок) и emerald (зеленый)
+                  const bg = isNegative ? 'bg-amber-100 border-amber-300' : 'bg-emerald-100 border-emerald-300';
+                  const dot = isNegative ? 'bg-amber-600' : 'bg-emerald-600';
+                  const text = isNegative ? 'text-amber-900' : 'text-emerald-900';
                   
                   return (
-                    <div key={i} className={`flex gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm ${bg}`}>
-                      <span className={`flex-shrink-0 w-8 h-8 rounded-full text-white flex items-center justify-center font-black ${dot}`}>{i+1}</span>
-                      <p className={`text-sm font-semibold leading-relaxed ${text}`}>{c.text}</p>
+                    <div key={i} className={`flex gap-4 p-5 rounded-2xl border-2 transition-all shadow-md ${bg}`}>
+                      <span className={`flex-shrink-0 w-8 h-8 rounded-full text-white flex items-center justify-center font-black shadow-sm ${dot}`}>{i+1}</span>
+                      <p className={`text-sm font-bold leading-relaxed ${text}`}>{c.text}</p>
                     </div>
                   );
                 })}
