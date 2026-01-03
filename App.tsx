@@ -4,8 +4,7 @@ import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
 import { LabData, LabKey, LAB_LABELS, LAB_ORDER, CalculationResult, Conclusion, SavedChart } from './types';
 import { 
   extractLabDataFromImage,
-  getBentoniteConclusions,
-  generateThematicImage
+  getBentoniteConclusions
 } from './services/geminiService';
 import { decode, decodeAudioData, createBlob } from './utils/audio';
 import { parseSpokenNumber } from './utils/voiceParser';
@@ -49,6 +48,7 @@ const App: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [conclusions, setConclusions] = useState<Conclusion[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [showStylePicker, setShowStylePicker] = useState(false);
   const [isGeneratingDoc, setIsGeneratingDoc] = useState(false);
   
@@ -61,16 +61,20 @@ const App: React.FC = () => {
 
   const results = useMemo((): CalculationResult | null => {
     const { m, q, w, f300, f600 } = labData;
-    const parse = (val: string) => parseFloat(val.replace(',', '.')) || 0;
-    const isValid = [m, q, w, f300, f600].every(val => val.trim() !== '' && !isNaN(parseFloat(val.replace(',', '.'))));
-    if (!isValid) return null;
-
+    const parse = (val: string) => {
+        const cleaned = val.replace(',', '.').trim();
+        return cleaned === '' ? NaN : parseFloat(cleaned);
+    };
+    
     const m_val = parse(m);
     const q_val = parse(q);
     const w_val = parse(w);
     const f3_val = parse(f300);
     const f6_val = parse(f600);
     
+    const isValid = [m_val, q_val, w_val, f3_val, f6_val].every(v => !isNaN(v));
+    if (!isValid) return null;
+
     const pv = f6_val - f3_val;
     const yp = f3_val - pv;
     const f = f6_val / 2;
@@ -84,7 +88,7 @@ const App: React.FC = () => {
     const generation = (q_val !== 0 && f6_val !== 0) 
       ? f6_val * (1 - (yp / f6_val)) * m_val / q_val 
       : 0;
-    const thickening = (m_val !== 0 && q_val !== 0) ? (f6_val ? f6_val / (0.01 * 0.01 * m_val * m_val * q_val) : 0) : 0;
+    const thickening = (m_val !== 0 && q_val !== 0 && f6_val !== 0) ? f6_val / (0.01 * 0.01 * m_val * m_val * q_val) : 0;
     const logArg = f6_val * 0.001;
     const logVal = logArg > 0 ? Math.log10(logArg) : 0;
     const completeness = (s !== 0) 
@@ -109,7 +113,6 @@ const App: React.FC = () => {
 
   const generateChart = async () => {
     if (!results || !chartRef.current) return;
-
     await new Promise(r => setTimeout(r, 100));
 
     const xVar = CHART_VARIABLES[axisX];
@@ -143,7 +146,6 @@ const App: React.FC = () => {
 
         updateParams(axisX, xData[i]);
         updateParams(axisY, yData[j]);
-
         row.push(calculateCompleteness(current_m, current_q, current_f600, current_yp, current_s));
       }
       zData.push(row);
@@ -165,10 +167,7 @@ const App: React.FC = () => {
       scene: {
         xaxis: { title: xVar.label },
         yaxis: { title: yVar.label },
-        zaxis: { 
-          title: 'Полнота',
-          range: [30, 200]
-        }
+        zaxis: { title: 'Полнота', range: [30, 200] }
       },
       paper_bgcolor: 'rgba(0,0,0,0)',
       plot_bgcolor: 'rgba(0,0,0,0)',
@@ -193,7 +192,6 @@ const App: React.FC = () => {
     if (!currentChartImage) return;
     const chartId = `${axisX}-${axisY}`;
     const exists = savedCharts.find(c => c.id === chartId);
-    
     if (exists) {
       setSavedCharts(savedCharts.filter(c => c.id !== chartId));
     } else {
@@ -209,13 +207,21 @@ const App: React.FC = () => {
   const isCurrentChartInReport = savedCharts.some(c => c.id === `${axisX}-${axisY}`);
 
   const handleGetConclusions = async () => {
-    if (!results) return;
+    if (!results) {
+        setAnalysisError("Пожалуйста, заполните все лабораторные данные для проведения анализа.");
+        return;
+    }
+    setAnalysisError(null);
     setIsAnalyzing(true);
     try {
       const cons = await getBentoniteConclusions(results);
       setConclusions(cons);
-    } catch (err) { console.error(err); }
-    finally { setIsAnalyzing(false); }
+    } catch (err) { 
+        console.error("Analysis failed:", err); 
+        setAnalysisError("Не удалось получить экспертный анализ. Проверьте подключение к интернету или API ключ.");
+    } finally { 
+        setIsAnalyzing(false); 
+    }
   };
 
   const exportWord = async () => {
@@ -226,9 +232,7 @@ const App: React.FC = () => {
       const binaryString = window.atob(base64);
       const len = binaryString.length;
       const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
+      for (let i = 0; i < len; i++) { bytes[i] = binaryString.charCodeAt(i); }
       return bytes;
     };
 
@@ -241,7 +245,7 @@ const App: React.FC = () => {
       margins: { top: 100, bottom: 100, left: 100, right: 100 }
     });
 
-    const rows = [
+    const reportRows = [
       ["Содержание смектита (m)", `${results.m}%`],
       ["Обменная емкость (q)", String(results.q)],
       ["Влажность (w)", `${results.w}%`],
@@ -266,11 +270,8 @@ const App: React.FC = () => {
         width: { size: 100, type: WidthType.PERCENTAGE },
         rows: [
           new TableRow({ children: [createCell("Параметр", true), createCell("Значение", true)] }),
-          ...rows.map(row => new TableRow({ 
-            children: [
-              createCell(row[0], false, "left"), 
-              createCell(row[1], false, "center")
-            ] 
+          ...reportRows.map(row => new TableRow({ 
+            children: [ createCell(row[0], false, "left"), createCell(row[1], false, "center") ] 
           }))
         ],
       }),
@@ -288,18 +289,13 @@ const App: React.FC = () => {
     if (savedCharts.length > 0) {
       children.push(new Paragraph({ text: "", spacing: { before: 400 } }));
       children.push(new Paragraph({ alignment: "center", children: [new TextRun({ text: "ГРАФИЧЕСКИЙ АНАЛИЗ ПОЛНОТЫ", bold: true, size: 28, color: "4f46e5" })] }));
-      
       savedCharts.forEach(chart => {
         const base64Data = chart.imageData.split(',')[1];
         const bytes = base64ToUint8Array(base64Data);
-        
         children.push(new Paragraph({ spacing: { before: 200 }, alignment: "center", children: [new TextRun({ text: `Зависимость от ${chart.axisX} и ${chart.axisY}`, bold: true, size: 20 })] }));
         children.push(new Paragraph({
           alignment: "center",
-          children: [new ImageRun({
-            data: bytes,
-            transformation: { width: 500, height: 375 }
-          })]
+          children: [new ImageRun({ data: bytes, transformation: { width: 500, height: 375 } })]
         }));
       });
     }
@@ -399,19 +395,13 @@ const App: React.FC = () => {
               const source = ctx.createBufferSource();
               source.buffer = buffer;
               source.connect(ctx.destination);
-              source.addEventListener('ended', () => {
-                sourcesRef.current.delete(source);
-              });
+              source.addEventListener('ended', () => { sourcesRef.current.delete(source); });
               source.start(nextStartTimeRef.current);
               nextStartTimeRef.current += buffer.duration;
               sourcesRef.current.add(source);
             }
-            const interrupted = msg.serverContent?.interrupted;
-            if (interrupted) {
-              for (const source of sourcesRef.current.values()) {
-                source.stop();
-                sourcesRef.current.delete(source);
-              }
+            if (msg.serverContent?.interrupted) {
+              for (const source of sourcesRef.current.values()) { source.stop(); sourcesRef.current.delete(source); }
               nextStartTimeRef.current = 0;
             }
             if (msg.serverContent?.inputTranscription) {
@@ -541,7 +531,12 @@ const App: React.FC = () => {
             <div className="bg-white rounded-3xl p-8 shadow-2xl border border-slate-100">
               <div className="flex justify-between items-center mb-6">
                 <h4 className="text-xl font-black text-slate-900">Выводы по качеству</h4>
-                <button onClick={handleGetConclusions} disabled={isAnalyzing} className="text-[10px] bg-emerald-600 text-white px-4 py-2 rounded-lg font-black uppercase hover:bg-emerald-700">{isAnalyzing ? 'Анализ...' : 'Обновить анализ'}</button>
+                <div className="flex flex-col items-end">
+                  <button onClick={handleGetConclusions} disabled={isAnalyzing} className="text-[10px] bg-emerald-600 text-white px-4 py-2 rounded-lg font-black uppercase hover:bg-emerald-700 disabled:opacity-50">
+                    {isAnalyzing ? 'Анализ...' : 'Обновить анализ'}
+                  </button>
+                  {analysisError && <span className="text-[10px] text-rose-500 font-bold mt-2 text-right">{analysisError}</span>}
+                </div>
               </div>
               <div className="space-y-3">
                 {conclusions.length === 0 && !isAnalyzing && <p className="text-center text-slate-400 py-10 italic">Нажмите кнопку выше для формирования экспертных выводов</p>}
@@ -550,7 +545,6 @@ const App: React.FC = () => {
                   const bgColor = isNegative ? 'bg-amber-50/70 border-amber-200' : 'bg-emerald-50/70 border-emerald-200';
                   const dotColor = isNegative ? 'bg-amber-600' : 'bg-emerald-600';
                   const textColor = isNegative ? 'text-amber-900' : 'text-emerald-900';
-                  
                   return (
                     <div key={i} className={`flex gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm ${bgColor}`}>
                       <span className={`flex-shrink-0 w-8 h-8 rounded-full text-white flex items-center justify-center font-black ${dotColor}`}>{i+1}</span>
@@ -574,31 +568,22 @@ const App: React.FC = () => {
               </h5>
               <div className="space-y-6 flex-grow overflow-y-auto pr-2">
                 <div>
-                  <label className="text-[10px] font-black uppercase text-slate-500 mb-2 block tracking-widest">Ось X (Параметр 1)</label>
+                  <label className="text-[10px] font-black uppercase text-slate-500 mb-2 block tracking-widest">Ось X</label>
                   <select value={axisX} onChange={(e) => setAxisX(e.target.value as any)} className="w-full bg-white border-2 border-slate-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:border-indigo-600 transition-all">
                     {Object.entries(CHART_VARIABLES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="text-[10px] font-black uppercase text-slate-500 mb-2 block tracking-widest">Ось Y (Параметр 2)</label>
+                  <label className="text-[10px] font-black uppercase text-slate-500 mb-2 block tracking-widest">Ось Y</label>
                   <select value={axisY} onChange={(e) => setAxisY(e.target.value as any)} className="w-full bg-white border-2 border-slate-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:border-indigo-600 transition-all">
                     {Object.entries(CHART_VARIABLES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                   </select>
                 </div>
-
                 <div className="space-y-3 pt-4">
                   <button onClick={toggleChartInReport} className={`w-full py-4 rounded-xl font-black uppercase text-xs tracking-widest shadow-lg transition-all flex items-center justify-center gap-2 ${isCurrentChartInReport ? 'bg-rose-500 text-white hover:bg-rose-600' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}>
-                    {isCurrentChartInReport ? (
-                      <><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd"></path></svg>Исключить</>
-                    ) : (
-                      <><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd"></path></svg>В отчет</>
-                    )}
+                    {isCurrentChartInReport ? "Исключить" : "В отчет"}
                   </button>
                   <p className="text-[10px] text-center text-slate-400 font-bold uppercase tracking-tighter">Сохранено: {savedCharts.length}</p>
-                </div>
-
-                <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 mt-4 space-y-2">
-                  <p className="text-[11px] text-indigo-900 font-bold leading-relaxed">Диапазон Z-оси: <span className="text-indigo-600">30 - 200</span></p>
                 </div>
               </div>
               <button onClick={() => setShowChartModal(false)} className="mt-8 w-full py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl hover:bg-black transition-all">Закрыть</button>

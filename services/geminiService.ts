@@ -1,35 +1,45 @@
 
-import { GoogleGenAI, Modality, Type, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { LabData, CalculationResult, Conclusion } from "../types";
 
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
-
 export async function extractLabDataFromImage(base64Image: string): Promise<Partial<LabData>> {
-  const ai = getAI();
-  // Using Flash model instead of Pro for free-tier compatibility
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: {
-      parts: [
-        { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
-        { text: 'Analyze this image and extract laboratory data for clay testing. Look for: Smectite content (содержание смектита), Cation Exchange Capacity (обменная емкость/КОЕ), Humidity/Water content (влажность), and rheometer readings at 300 and 600 RPM (Фи 300, Фи 600). Return ONLY a JSON object with keys "m", "q", "w", "f300", "f600" and their numeric values. If a value is missing, use null.' }
-      ]
-    }
-  });
-
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
   try {
-    const text = response.text || '{}';
-    const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(jsonStr);
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: {
+        parts: [
+          { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
+          { text: 'Analyze this image and extract laboratory data for clay testing. Look for: Smectite content (содержание смектита), Cation Exchange Capacity (обменная емкость/КОЕ), Humidity/Water content (влажность), and rheometer readings at 300 and 600 RPM (Фи 300, Фи 600). Return ONLY a JSON object with keys "m", "q", "w", "f300", "f600" and their numeric values. If a value is missing, use null.' }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            m: { type: Type.NUMBER, nullable: true },
+            q: { type: Type.NUMBER, nullable: true },
+            w: { type: Type.NUMBER, nullable: true },
+            f300: { type: Type.NUMBER, nullable: true },
+            f600: { type: Type.NUMBER, nullable: true }
+          }
+        }
+      }
+    });
+
+    return JSON.parse(response.text || '{}');
   } catch (e) {
-    console.error("Failed to parse image analysis result", e);
+    console.error("Failed to extract lab data from image:", e);
     return {};
   }
 }
 
 export async function getBentoniteConclusions(results: CalculationResult): Promise<Conclusion[]> {
-  const ai = getAI();
-  const prompt = `Проведи экспертный анализ бентонита для органомодификации на основе данных и критериев из тех. регламента:
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  const prompt = `Проведи экспертный анализ бентонита для органомодификации на основе данных и критериев:
   ДАННЫЕ:
   - Содержание смектита (m): ${results.m}%
   - Обменная емкость (q/КОЕ): ${results.q} мг-экв/100г
@@ -39,37 +49,49 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
   - Критерий загущения: ${results.thickening.toFixed(2)}
   - Критерий полноты: ${results.completeness.toFixed(2)}
 
-  ЭКСПЕРТНЫЕ КРИТЕРИИ ИЗ ДОКУМЕНТА:
-  1. YP/PV: >6 - вероятно активирован содой (сомнительно для органо), 3-6 - класс OCMA (ограниченно), 1.5-3 - класс Drilling grade (подходит), <1.5 - non treated.
-  2. Изотропия: Приемлемо >= 0.24.
-  3. Генерация: Приемлемо > 8.5.
-  4. Загущение: Хорошо < 1, Приемлемо 1-1.3.
-  5. Полнота: Приемлемо 100-115, Хорошо > 115.
+  ЭКСПЕРТНЫЕ КРИТЕРИИ:
+  1. YP/PV: >6 (сода), 3-6 (OCMA), 1.5-3 (Drilling grade), <1.5 (non treated).
+  2. Изотропия: >= 0.24 (хорошо).
+  3. Генерация: > 8.5 (хорошо).
+  4. Загущение: < 1 (отлично), 1-1.3 (приемлемо).
+  5. Полнота: 100-115 (норма), > 115 (отлично).
 
-  ЗАДАЧА: Сформулируй ровно 5 экспертных выводов о качестве и пригодности этой глины для органомодификации катионными ПАВ. Обоснуй каждый пункт конкретными значениями.
-  Классифицируй каждый вывод по тональности: "positive", "neutral" или "negative".
-  Верни ответ в формате JSON: {"conclusions": [{"text": "вывод 1", "sentiment": "positive"}, ...]}`;
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json"
-    }
-  });
+  ЗАДАЧА: Сформулируй ровно 5 экспертных выводов. Классифицируй каждый: "positive", "neutral" или "negative".`;
 
   try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            conclusions: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  text: { type: Type.STRING },
+                  sentiment: { type: Type.STRING }
+                },
+                required: ["text", "sentiment"]
+              }
+            }
+          },
+          required: ["conclusions"]
+        }
+      }
+    });
+
     const data = JSON.parse(response.text || '{"conclusions":[]}');
     return data.conclusions || [];
   } catch (e) {
-    return [{ text: "Ошибка анализа данных. Пожалуйста, проверьте ввод.", sentiment: "negative" }];
+    console.error("Failed to get conclusions from Gemini:", e);
+    throw e;
   }
 }
 
-/**
- * Image generation often requires a paid key or high-tier account.
- * We'll disable it to ensure the app works for everyone.
- */
 export async function generateThematicImage(topic: string): Promise<string | null> {
   return null;
 }
