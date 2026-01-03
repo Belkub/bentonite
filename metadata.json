@@ -1,0 +1,8 @@
+{
+  "name": "Geolab Calc Pro",
+  "description": "Professional geological data collector and analyzer for smectite, exchange capacity, and rheology with Gemini-powered voice, vision, and search features.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
