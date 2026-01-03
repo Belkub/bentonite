@@ -84,7 +84,7 @@ const App: React.FC = () => {
     const generation = (q_val !== 0 && f6_val !== 0) 
       ? f6_val * (1 - (yp / f6_val)) * m_val / q_val 
       : 0;
-    const thickening = (m_val !== 0 && q_val !== 0) ? f600 ? f6_val / (0.01 * 0.01 * m_val * m_val * q_val) : 0 : 0;
+    const thickening = (m_val !== 0 && q_val !== 0) ? (f6_val ? f6_val / (0.01 * 0.01 * m_val * m_val * q_val) : 0) : 0;
     const logArg = f6_val * 0.001;
     const logVal = logArg > 0 ? Math.log10(logArg) : 0;
     const completeness = (s !== 0) 
@@ -331,26 +331,26 @@ const App: React.FC = () => {
         ]
       });
 
-      const s1 = pptx.addSlide('MASTER_SLIDE');
+      const s1 = pptx.addSlide({ masterName: 'MASTER_SLIDE' });
       s1.addText('Анализ качества и пригодности\nбентонита', { x: 1, y: 1.5, w: 8, fontSize: 36, bold: true, color: style.primary });
 
-      const s2 = pptx.addSlide('MASTER_SLIDE');
+      const s2 = pptx.addSlide({ masterName: 'MASTER_SLIDE' });
       s2.addText('Результаты измерений', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
       const rows = [['Параметр', 'Значение'], ['Смектит (m)', `${results.m}%`], ['КОЕ (q)', String(results.q)], ['PV', results.pv.toFixed(2)], ['YP', results.yp.toFixed(2)], ['YP/PV', results.ypPvRatio.toFixed(2)]];
-      pptx.addTable(rows as any, { x: 0.5, y: 2, w: 10, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
+      s2.addTable(rows as any, { x: 0.5, y: 2, w: 10, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
 
       savedCharts.forEach(chart => {
-        const sChart = pptx.addSlide('MASTER_SLIDE');
+        const sChart = pptx.addSlide({ masterName: 'MASTER_SLIDE' });
         sChart.addText(`3D Анализ: ${chart.axisX} vs ${chart.axisY}`, { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
         sChart.addImage({ data: chart.imageData, x: 1, y: 1.8, w: 11, h: 5.2 });
       });
 
-      const s3 = pptx.addSlide('MASTER_SLIDE');
+      const s3 = pptx.addSlide({ masterName: 'MASTER_SLIDE' });
       s3.addText('Критерии качества', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
       const critRows = [['Критерий', 'Значение', 'Оценка'], ['Изотропия', results.isotropy.toFixed(4), results.isotropy >= 0.24 ? 'Ок' : 'Низкая'], ['Генерация', results.generation.toFixed(2), results.generation > 8.5 ? 'Высокая' : 'Низкая'], ['Загущение', results.thickening.toFixed(2), results.thickening < 1.3 ? 'Оптимально' : 'Высокое'], ['Полнота', results.completeness.toFixed(2), results.completeness > 115 ? 'Идеально' : 'Средне']];
-      pptx.addTable(critRows as any, { x: 0.5, y: 2, w: 12, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
+      s3.addTable(critRows as any, { x: 0.5, y: 2, w: 12, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
 
-      const s4 = pptx.addSlide('MASTER_SLIDE');
+      const s4 = pptx.addSlide({ masterName: 'MASTER_SLIDE' });
       s4.addText('Экспертные выводы', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
       conclusions.forEach((c, i) => {
         const color = c.sentiment === 'negative' ? 'b45309' : style.primary;
