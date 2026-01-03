@@ -208,7 +208,7 @@ const App: React.FC = () => {
 
   const handleGetConclusions = async () => {
     if (!results) {
-        setAnalysisError("Пожалуйста, заполните данные.");
+        setAnalysisError("Введите все данные для расчета.");
         return;
     }
     setAnalysisError(null);
@@ -218,7 +218,7 @@ const App: React.FC = () => {
       setConclusions(cons);
     } catch (err) { 
         console.error("Analysis failed:", err); 
-        setAnalysisError("Ошибка связи с сервером.");
+        setAnalysisError("Ошибка связи с ИИ.");
     } finally { 
         setIsAnalyzing(false); 
     }
@@ -500,9 +500,9 @@ const App: React.FC = () => {
           <div className="space-y-4 animate-in fade-in zoom-in-95">
             <div className="bg-white rounded-3xl overflow-hidden shadow-2xl border border-slate-100">
               <div className="bg-indigo-600 p-6 text-white flex justify-between items-center">
-                <h3 className="text-lg font-black uppercase">Результаты</h3>
+                <h3 className="text-lg font-black uppercase">Протокол</h3>
                 <div className="flex gap-2">
-                  <button onClick={() => setShowChartModal(true)} className="bg-emerald-500 text-white px-4 py-2 rounded-lg text-[10px] font-black uppercase shadow-lg">Графики</button>
+                  <button onClick={() => setShowChartModal(true)} className="bg-emerald-500 text-white px-3 py-2 rounded-lg text-[10px] font-black uppercase">Графики</button>
                   <button onClick={exportWord} className="bg-white/20 px-3 py-2 rounded-lg text-[10px] font-black uppercase">Word</button>
                   <button onClick={() => setShowStylePicker(true)} className="bg-white text-indigo-700 px-4 py-2 rounded-lg text-[10px] font-black uppercase">PPTX</button>
                 </div>
@@ -512,6 +512,7 @@ const App: React.FC = () => {
                   {LAB_ORDER.map(k => (
                     <div key={k} className="flex justify-between border-b pb-1 text-sm"><span className="text-slate-500">{LAB_LABELS[k]}</span><span className="font-mono font-black">{labData[k]}</span></div>
                   ))}
+                  <div className="flex justify-between font-black text-indigo-600 bg-indigo-50 p-2 rounded mt-2"><span>ПОЕ (полная емкость)</span><span>{results.poe.toFixed(2)}</span></div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                    {[{ l: 'Изотропия', v: results.isotropy.toFixed(4) }, { l: 'Генерация', v: results.generation.toFixed(2) }, { l: 'Загущение', v: results.thickening.toFixed(2) }, { l: 'Полнота', v: results.completeness.toFixed(2) }].map(c => (
@@ -526,9 +527,9 @@ const App: React.FC = () => {
 
             <div className="bg-white rounded-3xl p-6 shadow-2xl border border-slate-100">
               <div className="flex justify-between items-center mb-6">
-                <h4 className="text-xl font-black text-slate-900">Выводы</h4>
-                <button onClick={handleGetConclusions} disabled={isAnalyzing} className="text-[10px] bg-emerald-600 text-white px-4 py-2 rounded-lg font-black uppercase shadow-md">
-                   {isAnalyzing ? 'Анализ...' : 'Обновить'}
+                <h4 className="text-xl font-black text-slate-900">Выводы ИИ</h4>
+                <button onClick={handleGetConclusions} disabled={isAnalyzing} className="text-[10px] bg-emerald-600 text-white px-4 py-2 rounded-lg font-black uppercase">
+                   {isAnalyzing ? 'Обработка...' : 'Анализ'}
                 </button>
               </div>
               <div className="space-y-3">
@@ -536,8 +537,8 @@ const App: React.FC = () => {
                   const s = c.sentiment?.toLowerCase().trim() || 'neutral';
                   const isNegative = s.includes('neg') || s.includes('нег') || s.includes('bad') || s.includes('плох');
                   
-                  // ПРИНУДИТЕЛЬНЫЕ ЦВЕТА: amber (коричнево-оранжевый) для негатива
-                  const bgClass = isNegative ? 'bg-amber-100 border-amber-300 shadow-amber-50' : 'bg-emerald-100 border-emerald-300 shadow-emerald-50';
+                  // Коричнево-оранжевый (amber) для негативных, изумрудный для остальных
+                  const bgClass = isNegative ? 'bg-amber-100 border-amber-300' : 'bg-emerald-100 border-emerald-300';
                   const dotClass = isNegative ? 'bg-amber-600' : 'bg-emerald-600';
                   const textClass = isNegative ? 'text-amber-900' : 'text-emerald-900';
                   
@@ -557,9 +558,9 @@ const App: React.FC = () => {
       {showChartModal && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center z-[70] p-4">
           <div className="bg-white w-full max-w-5xl rounded-3xl overflow-hidden shadow-2xl flex flex-col h-[90vh]">
-            <div className="flex-grow p-4 min-h-0"><div ref={chartRef} className="w-full h-full"></div></div>
-            <div className="p-6 bg-slate-50 border-t flex justify-between items-center">
-               <div className="flex gap-4">
+            <div className="flex-grow p-2 min-h-0"><div ref={chartRef} className="w-full h-full"></div></div>
+            <div className="p-4 bg-slate-50 border-t flex flex-wrap gap-2 justify-between items-center">
+               <div className="flex gap-2">
                   <select value={axisX} onChange={(e) => setAxisX(e.target.value as any)} className="bg-white border p-2 rounded-lg text-xs font-bold">
                     {Object.entries(CHART_VARIABLES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                   </select>
@@ -568,10 +569,10 @@ const App: React.FC = () => {
                   </select>
                </div>
                <div className="flex gap-2">
-                 <button onClick={toggleChartInReport} className={`px-4 py-2 rounded-xl font-black uppercase text-[10px] ${isCurrentChartInReport ? 'bg-rose-500 text-white' : 'bg-emerald-600 text-white'}`}>
-                   {isCurrentChartInReport ? "Убрать" : "В отчет"}
+                 <button onClick={toggleChartInReport} className={`px-4 py-2 rounded-lg font-black uppercase text-[10px] ${isCurrentChartInReport ? 'bg-rose-500 text-white' : 'bg-emerald-600 text-white'}`}>
+                   {isCurrentChartInReport ? "Удалить" : "В отчет"}
                  </button>
-                 <button onClick={() => setShowChartModal(false)} className="px-4 py-2 bg-slate-900 text-white rounded-xl font-black uppercase text-[10px]">Закрыть</button>
+                 <button onClick={() => setShowChartModal(false)} className="px-4 py-2 bg-slate-900 text-white rounded-lg font-black uppercase text-[10px]">X</button>
                </div>
             </div>
           </div>
@@ -581,7 +582,7 @@ const App: React.FC = () => {
       {showStylePicker && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl">
-            <h5 className="text-lg font-black uppercase mb-4 text-center">Стиль PPTX</h5>
+            <h5 className="text-lg font-black uppercase mb-4 text-center">Выбор темы</h5>
             <div className="grid grid-cols-1 gap-2">
               {PPT_STYLES.map(s => (
                 <button key={s.id} onClick={() => createPPTX(s)} className="p-3 rounded-xl border-2 hover:border-indigo-600 text-left flex items-center gap-3">
@@ -590,15 +591,15 @@ const App: React.FC = () => {
                 </button>
               ))}
             </div>
-            <button onClick={() => setShowStylePicker(false)} className="w-full mt-4 py-2 font-black text-slate-400 uppercase text-xs">Отмена</button>
+            <button onClick={() => setShowStylePicker(false)} className="w-full mt-4 py-2 font-black text-slate-400 uppercase text-xs">Закрыть</button>
           </div>
         </div>
       )}
 
       {isGeneratingDoc && (
         <div className="fixed inset-0 bg-indigo-600/90 flex flex-col items-center justify-center z-[80] text-white">
-          <div className="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin mb-4"></div>
-          <p className="text-xs font-black uppercase tracking-widest">Генерация...</p>
+          <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin mb-4"></div>
+          <p className="text-[10px] font-black uppercase tracking-widest">Создание документа...</p>
         </div>
       )}
     </div>
