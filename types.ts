@@ -16,7 +16,6 @@ export interface CalculationResult {
   f: number;
   pv: number;
   yp: number;
-  // New fields
   poe: number;
   ypPvRatio: number;
   s: number;

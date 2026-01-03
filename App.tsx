@@ -3,10 +3,42 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
 import { LabData, LabKey, LAB_LABELS, LAB_ORDER, CalculationResult } from './types';
 import { 
-  extractLabDataFromImage 
+  extractLabDataFromImage,
+  getBentoniteConclusions,
+  generateThematicImage
 } from './services/geminiService';
 import { decode, decodeAudioData, createBlob } from './utils/audio';
 import { parseSpokenNumber } from './utils/voiceParser';
+
+// Библиотеки для экспорта
+import * as docx from 'docx';
+import PptxGenJS from 'pptxgenjs';
+
+declare var Plotly: any;
+
+type PPTStyle = {
+  id: string;
+  name: string;
+  primary: string;
+  secondary: string;
+  text: string;
+  bg: string;
+};
+
+const PPT_STYLES: PPTStyle[] = [
+  { id: 'indigo', name: 'Geo Blue', primary: '#4f46e5', secondary: '#818cf8', text: '#ffffff', bg: '#f8fafc' },
+  { id: 'emerald', name: 'Lab Green', primary: '#059669', secondary: '#34d399', text: '#ffffff', bg: '#f0fdf4' },
+  { id: 'dark', name: 'Industrial', primary: '#1e293b', secondary: '#f97316', text: '#ffffff', bg: '#0f172a' },
+  { id: 'academic', name: 'Classic', primary: '#334155', secondary: '#cbd5e1', text: '#000000', bg: '#ffffff' },
+];
+
+const CHART_VARIABLES = {
+  f600: { label: 'Фи 600', min: 15, max: 120 },
+  yp: { label: 'YP', min: 5, max: 60 },
+  m: { label: 'Смектит (m)', min: 40, max: 100 },
+  q: { label: 'КОЕ (q)', min: 40, max: 120 },
+  yp_f600: { label: 'YP/f600', min: 0.05, max: 1.0 }
+};
 
 const App: React.FC = () => {
   const [labData, setLabData] = useState<LabData>({
@@ -15,37 +47,21 @@ const App: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(0);
   const [showResults, setShowResults] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [conclusions, setConclusions] = useState<string[]>([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [showStylePicker, setShowStylePicker] = useState(false);
+  const [isGeneratingDoc, setIsGeneratingDoc] = useState(false);
   
-  // Храним актуальное состояние для Live API коллбэков
-  const stateRef = useRef({ currentStep, labData, showResults });
-  useEffect(() => {
-    stateRef.current = { currentStep, labData, showResults };
-  }, [currentStep, labData, showResults]);
-
-  // Состояния для Live API
-  const [isLiveActive, setIsLiveActive] = useState(false);
-  const [liveTranscription, setLiveTranscription] = useState('');
-  
-  const sessionRef = useRef<any>(null);
-  const audioContextInRef = useRef<AudioContext | null>(null);
-  const audioContextOutRef = useRef<AudioContext | null>(null);
-  const nextStartTimeRef = useRef(0);
-  const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-
-  // Накопитель транскрипции для текущего "хода" (turn)
-  const turnTranscriptionRef = useRef<string>('');
-
-  const handleInputChange = (key: LabKey, value: string) => {
-    const standardized = value.replace(',', '.');
-    if (/^[0-9.]*$/.test(standardized)) {
-      setLabData(prev => ({ ...prev, [key]: standardized }));
-    }
-  };
+  const [showChartModal, setShowChartModal] = useState(false);
+  const [axisX, setAxisX] = useState<keyof typeof CHART_VARIABLES>('f600');
+  const [axisY, setAxisY] = useState<keyof typeof CHART_VARIABLES>('m');
+  const [chartImageData, setChartImageData] = useState<string | null>(null);
+  const chartRef = useRef<HTMLDivElement>(null);
 
   const results = useMemo((): CalculationResult | null => {
     const { m, q, w, f300, f600 } = labData;
-    const parse = (val: string) => parseFloat(val) || 0;
-    const isValid = [m, q, w, f300, f600].every(val => val.trim() !== '' && !isNaN(parseFloat(val)));
+    const parse = (val: string) => parseFloat(val.replace(',', '.')) || 0;
+    const isValid = [m, q, w, f300, f600].every(val => val.trim() !== '' && !isNaN(parseFloat(val.replace(',', '.'))));
     if (!isValid) return null;
 
     const m_val = parse(m);
@@ -57,29 +73,17 @@ const App: React.FC = () => {
     const pv = f6_val - f3_val;
     const yp = f3_val - pv;
     const f = f6_val / 2;
-
-    // Advanced Calculations
     const poe = q_val / (1 - 0.01 * w_val);
     const ypPvRatio = pv !== 0 ? yp / pv : 0;
     const s = f6_val !== 0 ? yp / f6_val : 0;
     
-    // Технологические критерии
-    
-    // 1. Изотропия: (0.5 - ((YP/f600) - 0.5)^2) * m * m * 0.01 * 0.01
     const isotropy = (f6_val !== 0) 
       ? (0.5 - Math.pow(((yp / f6_val) - 0.5), 2)) * m_val * m_val * 0.01 * 0.01 
       : 0;
-
-    // 2. Генерация: f600 * (1 - (YP/f600)) * m / q
     const generation = (q_val !== 0 && f6_val !== 0) 
       ? f6_val * (1 - (yp / f6_val)) * m_val / q_val 
       : 0;
-    
-    // 3. Загущение: f600 / (0.01 * 0.01 * m^2 * q)
     const thickening = (m_val !== 0 && q_val !== 0) ? f6_val / (0.01 * 0.01 * m_val * m_val * q_val) : 0;
-    
-    // 4. Полнота: q * 0.01 * m * 0.01 * m * LOG10(f600 * 0.001)^2 / (YP / f600)
-    // s = YP / f600
     const logArg = f6_val * 0.001;
     const logVal = logArg > 0 ? Math.log10(logArg) : 0;
     const completeness = (s !== 0) 
@@ -92,34 +96,239 @@ const App: React.FC = () => {
     };
   }, [labData]);
 
-  const getSystemInstruction = () => {
-    let instr = `Вы — эксперт GeoLab. `;
-    if (showResults && results) {
-      instr += `АНАЛИЗ ГОТОВ. 
-      Результаты: Смектит=${results.m}, КОЕ=${results.q}, ПОЕ=${results.poe.toFixed(2)}, YP/PV=${results.ypPvRatio.toFixed(2)}, s=${results.s.toFixed(2)}.
-      Критерии: Изотропия=${results.isotropy.toFixed(4)}, Генерация=${results.generation.toFixed(2)}, Загущение=${results.thickening.toFixed(2)}, Полнота=${results.completeness.toFixed(2)}.
-      Обсудите эти показатели, дайте экспертную оценку качеству глины и рекомендации.`;
-    } else {
-      instr += `Ждем ввод для: ${LAB_LABELS[LAB_ORDER[stateRef.current.currentStep]]}. Принимайте числа полностью.`;
+  const calculateCompleteness = (m: number, q: number, f600: number, yp: number, manualS?: number) => {
+    const s = manualS !== undefined ? manualS : (f600 !== 0 ? yp / f600 : 0.0001);
+    const logArg = f600 * 0.001;
+    const logVal = logArg > 0 ? Math.log10(logArg) : 0;
+    return (s !== 0) ? (q * 0.01 * m * 0.01 * m * Math.pow(logVal, 2)) / s : 0;
+  };
+
+  const generateChart = async () => {
+    if (!results || !chartRef.current) return;
+
+    // Use a small delay to ensure the DOM is ready for Plotly
+    await new Promise(r => setTimeout(r, 100));
+
+    const xVar = CHART_VARIABLES[axisX];
+    const yVar = CHART_VARIABLES[axisY];
+    
+    const xSteps = 20;
+    const ySteps = 20;
+    const xData: number[] = [];
+    const yData: number[] = [];
+    const zData: number[][] = [];
+
+    for (let i = 0; i <= xSteps; i++) xData.push(xVar.min + (xVar.max - xVar.min) * (i / xSteps));
+    for (let j = 0; j <= ySteps; j++) yData.push(yVar.min + (yVar.max - yVar.min) * (j / ySteps));
+
+    for (let j = 0; j <= ySteps; j++) {
+      const row: number[] = [];
+      for (let i = 0; i <= xSteps; i++) {
+        let current_m = results.m;
+        let current_q = results.q;
+        let current_f600 = parseFloat(labData.f600.replace(',', '.')) || 60;
+        let current_yp = results.yp;
+        let current_s: number | undefined = undefined;
+
+        const updateParams = (key: keyof typeof CHART_VARIABLES, val: number) => {
+          if (key === 'm') current_m = val;
+          else if (key === 'q') current_q = val;
+          else if (key === 'f600') current_f600 = val;
+          else if (key === 'yp') current_yp = val;
+          else if (key === 'yp_f600') current_s = val;
+        };
+
+        updateParams(axisX, xData[i]);
+        updateParams(axisY, yData[j]);
+
+        row.push(calculateCompleteness(current_m, current_q, current_f600, current_yp, current_s));
+      }
+      zData.push(row);
     }
-    return instr;
+
+    const data = [{
+      z: zData,
+      x: xData,
+      y: yData,
+      type: 'surface',
+      colorscale: 'Viridis',
+      colorbar: { title: 'Полнота', thickness: 15 }
+    }];
+
+    const layout = {
+      title: `Зависимость полноты от ${xVar.label} и ${yVar.label}`,
+      autosize: true,
+      margin: { l: 0, r: 0, b: 0, t: 50 },
+      scene: {
+        xaxis: { title: xVar.label },
+        yaxis: { title: yVar.label },
+        zaxis: { title: 'Полнота' }
+      },
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: 'rgba(0,0,0,0)',
+    };
+
+    try {
+      await Plotly.newPlot(chartRef.current, data, layout, { responsive: true, displayModeBar: false });
+      const img = await Plotly.toImage(chartRef.current, { format: 'png', width: 1000, height: 800 });
+      setChartImageData(img);
+    } catch (err) {
+      console.error("Plotly error:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (showChartModal && results) {
+      generateChart();
+    }
+  }, [showChartModal, axisX, axisY, results]);
+
+  const stateRef = useRef({ results, conclusions, chartImageData });
+  useEffect(() => {
+    stateRef.current = { results, conclusions, chartImageData };
+  }, [results, conclusions, chartImageData]);
+
+  const handleGetConclusions = async () => {
+    if (!results) return;
+    setIsAnalyzing(true);
+    try {
+      const cons = await getBentoniteConclusions(results);
+      setConclusions(cons);
+    } catch (e) { console.error(e); }
+    finally { setIsAnalyzing(false); }
+  };
+
+  const exportWord = async () => {
+    if (!results) return;
+    const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, VerticalAlign, ImageRun } = docx;
+
+    const createCell = (text: string, bold = false, align = AlignmentType.CENTER) => new TableCell({
+      children: [new Paragraph({ 
+        children: [new TextRun({ text: String(text), bold, size: 22 })],
+        alignment: align
+      })],
+      verticalAlign: VerticalAlign.CENTER,
+      padding: { top: 100, bottom: 100, left: 100, right: 100 }
+    });
+
+    const rows = [
+      ["Содержание смектита (m)", `${results.m}%`],
+      ["Обменная емкость (q)", results.q],
+      ["Влажность (w)", `${results.w}%`],
+      ["PV (Пластическая вязкость)", results.pv.toFixed(2)],
+      ["YP (Предел текучести)", results.yp.toFixed(2)],
+      ["Эфф. вязкость (f600/2)", results.f.toFixed(2)],
+      ["YP/PV", results.ypPvRatio.toFixed(2)],
+      ["ПОЕ (полная емкость)", results.poe.toFixed(2)],
+      ["Критерий изотропии", results.isotropy.toFixed(4)],
+      ["Критерий генерации", results.generation.toFixed(2)],
+      ["Критерий загущения", results.thickening.toFixed(2)],
+      ["Критерий полноты", results.completeness.toFixed(2)],
+    ];
+
+    const children: any[] = [
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 400 },
+        children: [new TextRun({ text: "ОТЧЕТ ОБ ИСПЫТАНИИ БЕНТОНИТА", bold: true, size: 32, color: "4f46e5" })],
+      }),
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        rows: [
+          new TableRow({ children: [createCell("Параметр", true), createCell("Значение", true)] }),
+          ...rows.map(row => new TableRow({ children: [createCell(row[0], false, AlignmentType.LEFT), createCell(row[1], false, AlignmentType.CENTER)] }))
+        ],
+      }),
+      new Paragraph({ text: "", spacing: { before: 400 } }),
+      new Paragraph({ children: [new TextRun({ text: "ЭКСПЕРТНЫЕ ВЫВОДЫ:", bold: true, size: 28, color: "10b981" })], spacing: { after: 200 } }),
+      ...conclusions.map((c, i) => new Paragraph({ spacing: { before: 120 }, children: [new TextRun({ text: `${i + 1}. `, bold: true, color: "10b981" }), new TextRun({ text: c })] })),
+    ];
+
+    if (chartImageData) {
+      const base64 = chartImageData.split(',')[1];
+      children.push(new Paragraph({ text: "", spacing: { before: 400 } }));
+      children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "ГРАФИК АНАЛИЗА ПОЛНОТЫ", bold: true, size: 28, color: "4f46e5" })] }));
+      children.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [new ImageRun({
+          data: Uint8Array.from(atob(base64), c => c.charCodeAt(0)),
+          transformation: { width: 500, height: 375 }
+        })]
+      }));
+    }
+
+    const doc = new Document({ sections: [{ children }] });
+    const blob = await Packer.toBlob(doc);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'geolab_report.docx';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const createPPTX = async (style: PPTStyle) => {
+    if (!results) return;
+    setIsGeneratingDoc(true);
+    setShowStylePicker(false);
+    
+    try {
+      const pptx = new PptxGenJS();
+      pptx.layout = 'LAYOUT_WIDE';
+      pptx.defineSlideMaster({
+        title: 'MASTER_SLIDE',
+        background: { color: style.bg },
+        objects: [
+          { rect: { x: 0, y: 0, w: '100%', h: 0.8, fill: { color: style.primary } } },
+          { text: { text: 'GeoLab Pro: Технический отчет', options: { x: 0.5, y: 0.2, color: 'ffffff', fontSize: 24, bold: true } } }
+        ]
+      });
+
+      const s1 = pptx.addSlide('MASTER_SLIDE');
+      s1.addText('Анализ качества и пригодности\nбентонита', { x: 1, y: 1.5, w: 8, fontSize: 36, bold: true, color: style.primary });
+      const introImg = await generateThematicImage('scientific analysis of minerals clay');
+      if (introImg) s1.addImage({ data: introImg, x: 8, y: 1.5, w: 5, h: 4 });
+
+      const s2 = pptx.addSlide('MASTER_SLIDE');
+      s2.addText('Результаты измерений', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
+      const rows = [['Параметр', 'Значение'], ['Смектит (m)', `${results.m}%`], ['КОЕ (q)', String(results.q)], ['PV', results.pv.toFixed(2)], ['YP', results.yp.toFixed(2)], ['YP/PV', results.ypPvRatio.toFixed(2)]];
+      s2.addTable(rows, { x: 0.5, y: 2, w: 6, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
+      const labImg = await generateThematicImage('rheology lab equipment');
+      if (labImg) s2.addImage({ data: labImg, x: 7, y: 2, w: 5.5, h: 3 });
+
+      if (chartImageData) {
+        const sChart = pptx.addSlide('MASTER_SLIDE');
+        sChart.addText('3D Анализ полноты', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
+        sChart.addImage({ data: chartImageData, x: 1, y: 1.8, w: 11, h: 5.2 });
+      }
+
+      const s3 = pptx.addSlide('MASTER_SLIDE');
+      s3.addText('Критерии качества', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
+      const critRows = [['Критерий', 'Значение', 'Оценка'], ['Изотропия', results.isotropy.toFixed(4), results.isotropy >= 0.24 ? 'Ок' : 'Низкая'], ['Генерация', results.generation.toFixed(2), results.generation > 8.5 ? 'Высокая' : 'Низкая'], ['Загущение', results.thickening.toFixed(2), results.thickening < 1.3 ? 'Оптимально' : 'Высокое'], ['Полнота', results.completeness.toFixed(2), results.completeness > 115 ? 'Идеально' : 'Средне']];
+      s3.addTable(critRows, { x: 0.5, y: 2, w: 12, fill: { color: 'FFFFFF' }, border: { pt: 1, color: style.secondary } });
+
+      const s4 = pptx.addSlide('MASTER_SLIDE');
+      s4.addText('Экспертные выводы', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
+      conclusions.forEach((c, i) => s4.addText(`${i+1}. ${c}`, { x: 0.5, y: 2 + i * 0.7, w: 9, fontSize: 14, color: style.primary }));
+
+      await pptx.writeFile({ fileName: 'Geolab_Analysis.pptx' });
+    } catch (e) { console.error(e); }
+    finally { setIsGeneratingDoc(false); }
   };
 
   const startLiveSession = async () => {
-    if (isLiveActive) { stopLiveSession(); return; }
+    if (isLiveActive) { sessionRef.current?.close(); setIsLiveActive(false); return; }
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       audioContextInRef.current = new AudioContext({ sampleRate: 16000 });
       audioContextOutRef.current = new AudioContext({ sampleRate: 24000 });
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         config: {
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
-          tools: [{ googleSearch: {} }],
-          systemInstruction: getSystemInstruction(),
+          systemInstruction: 'Вы эксперт GeoLab. Помогайте вводить данные и анализировать бентонит.',
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } }
         },
         callbacks: {
@@ -147,34 +356,11 @@ const App: React.FC = () => {
               nextStartTimeRef.current += buffer.duration;
               sourcesRef.current.add(source);
             }
-
             if (msg.serverContent?.inputTranscription) {
               const text = msg.serverContent.inputTranscription.text;
-              turnTranscriptionRef.current += " " + text;
-              setLiveTranscription(turnTranscriptionRef.current);
-              
-              const parsed = parseSpokenNumber(turnTranscriptionRef.current);
-              if (parsed !== null) {
-                const key = LAB_ORDER[stateRef.current.currentStep];
-                setLabData(prev => ({ ...prev, [key]: parsed.toString() }));
-              }
-            }
-
-            if (msg.serverContent?.turnComplete) {
-              const finalVal = parseSpokenNumber(turnTranscriptionRef.current);
-              if (finalVal !== null) {
-                const idx = stateRef.current.currentStep;
-                if (idx < 4) setCurrentStep(idx + 1);
-                else setShowResults(true);
-              }
-              turnTranscriptionRef.current = '';
-              setLiveTranscription('');
-            }
-
-            if (msg.serverContent?.interrupted) {
-              sourcesRef.current.forEach(s => s.stop());
-              sourcesRef.current.clear();
-              nextStartTimeRef.current = 0;
+              setLiveTranscription(text);
+              const parsed = parseSpokenNumber(text);
+              if (parsed !== null) setLabData(prev => ({ ...prev, [LAB_ORDER[currentStep]]: parsed.toString() }));
             }
           },
           onclose: () => setIsLiveActive(false),
@@ -185,188 +371,195 @@ const App: React.FC = () => {
     } catch (e) { setIsLiveActive(false); }
   };
 
-  const stopLiveSession = () => {
-    sessionRef.current?.close();
-    sessionRef.current = null;
-    setIsLiveActive(false);
-  };
-
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setIsUploading(true);
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      const base64 = (reader.result as string).split(',')[1];
-      const ext = await extractLabDataFromImage(base64);
-      const normalized: Partial<LabData> = {};
-      Object.keys(ext).forEach(k => {
-        const val = ext[k as keyof LabData];
-        if (val !== null && val !== undefined) normalized[k as keyof LabData] = val.toString();
-      });
-      setLabData(prev => ({ ...prev, ...normalized }));
-      setIsUploading(false);
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const isDataValid = !!results;
+  const [isLiveActive, setIsLiveActive] = useState(false);
+  const [liveTranscription, setLiveTranscription] = useState('');
+  const sessionRef = useRef<any>(null);
+  const audioContextInRef = useRef<AudioContext | null>(null);
+  const audioContextOutRef = useRef<AudioContext | null>(null);
+  const nextStartTimeRef = useRef(0);
+  const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
 
   return (
-    <div className="min-h-screen bg-slate-50 p-3 md:p-5 text-slate-900 font-sans">
-      <div className="max-w-4xl mx-auto space-y-3">
-        
-        {/* Компактный хедер */}
-        <header className="flex items-center justify-between bg-white px-4 py-3 rounded-xl shadow-sm border border-slate-100">
-          <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${isLiveActive ? 'bg-red-500 animate-pulse' : 'bg-indigo-600'}`}></div>
-            <h1 className="text-lg font-black tracking-tighter">GeoLab<span className="text-indigo-600">Lite</span></h1>
+    <div className="min-h-screen bg-slate-50 p-3 md:p-5 text-slate-900 font-sans text-left">
+      <div className="max-w-4xl mx-auto space-y-4">
+        <header className="flex items-center justify-between bg-white px-5 py-4 rounded-2xl shadow-sm border border-slate-100">
+          <div className="flex items-center gap-3">
+            <div className={`w-3 h-3 rounded-full ${isLiveActive ? 'bg-red-500 animate-pulse' : 'bg-indigo-600'}`}></div>
+            <h1 className="text-xl font-black tracking-tighter">GeoLab<span className="text-indigo-600">Pro</span></h1>
           </div>
           <div className="flex gap-2">
-            <button onClick={startLiveSession} className={`px-3 py-1.5 rounded-lg font-bold text-[10px] uppercase tracking-wider transition-all ${isLiveActive ? 'bg-red-500 text-white shadow-lg' : 'bg-indigo-600 text-white shadow-md'}`}>
-              {isLiveActive ? 'Стоп Голос' : 'Голос'}
+            <button onClick={startLiveSession} className={`px-4 py-2 rounded-xl font-bold text-xs uppercase shadow-md ${isLiveActive ? 'bg-red-500 text-white' : 'bg-indigo-600 text-white'}`}>
+              {isLiveActive ? 'Стоп' : 'Голос'}
             </button>
-            <label className="cursor-pointer bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg font-bold text-[10px] uppercase transition-all">
+            <label className="cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-xl font-bold text-xs uppercase shadow-sm">
               {isUploading ? '...' : 'Фото'}
-              <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
+              <input type="file" className="hidden" accept="image/*" onChange={async (e) => {
+                const file = e.target.files?.[0]; if (!file) return;
+                setIsUploading(true);
+                const reader = new FileReader();
+                reader.onloadend = async () => {
+                  const base64 = (reader.result as string).split(',')[1];
+                  const ext = await extractLabDataFromImage(base64);
+                  setLabData(prev => ({ ...prev, ...ext }));
+                  setIsUploading(false);
+                };
+                reader.readAsDataURL(file);
+              }} />
             </label>
           </div>
         </header>
 
-        {/* Статус транскрипции */}
         {isLiveActive && (
-          <div className="bg-slate-900 text-white px-4 py-2 rounded-lg shadow-inner animate-in fade-in slide-in-from-top-1">
-            <p className="text-[11px] text-indigo-300 font-medium italic truncate">
-              {liveTranscription || "Слушаю... Назовите число целиком"}
-            </p>
+          <div className="bg-slate-900 text-white px-5 py-3 rounded-xl shadow-lg border-l-4 border-indigo-500">
+            <p className="text-xs text-indigo-300 font-bold uppercase mb-1">Распознано:</p>
+            <p className="text-sm italic">{liveTranscription || "Слушаю..."}</p>
           </div>
         )}
 
-        {/* Компактная сетка параметров */}
-        <div className="grid grid-cols-5 gap-1.5">
+        <div className="grid grid-cols-5 gap-2">
           {LAB_ORDER.map((key, index) => (
-            <button
-              key={key}
-              onClick={() => setCurrentStep(index)}
-              className={`p-2 rounded-lg border text-center transition-all ${
-                currentStep === index ? 'bg-indigo-600 border-indigo-600 text-white shadow-md' : 
-                labData[key] ? 'bg-white border-emerald-200 text-slate-800' : 'bg-white border-slate-200 opacity-60'
-              }`}
-            >
-              <div className={`text-[7px] font-black uppercase mb-0.5 truncate ${currentStep === index ? 'text-indigo-100' : 'text-slate-400'}`}>
-                {LAB_LABELS[key].split(' ')[0]}
-              </div>
-              <div className="text-sm font-mono font-bold leading-none">{labData[key] || '0'}</div>
+            <button key={key} onClick={() => { setCurrentStep(index); setShowResults(false); }}
+              className={`p-3 rounded-2xl border-2 text-center transition-all ${currentStep === index ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg' : labData[key] ? 'bg-white border-emerald-100 text-slate-800' : 'bg-white border-slate-200 opacity-60'}`}>
+              <div className={`text-[8px] font-black uppercase mb-1 truncate ${currentStep === index ? 'text-indigo-100' : 'text-slate-400'}`}>{LAB_LABELS[key]}</div>
+              <div className="text-lg font-mono font-black">{labData[key] || '0'}</div>
             </button>
           ))}
         </div>
 
-        {/* Окно активного ввода */}
         {!showResults && (
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-1 bg-slate-100">
-              <div className="h-full bg-indigo-600 transition-all duration-500" style={{ width: `${((currentStep + 1) / 5) * 100}%` }}></div>
-            </div>
-            <div className="text-center mb-4">
-              <h2 className="text-base font-black text-slate-500 uppercase tracking-widest">{LAB_LABELS[LAB_ORDER[currentStep]]}</h2>
-            </div>
-            <div className="max-w-[200px] mx-auto relative mb-4">
-              <input
-                type="text"
-                inputMode="decimal"
-                className="w-full text-center text-4xl font-mono font-black py-3 bg-slate-50 border-b-4 border-slate-100 focus:border-indigo-600 outline-none transition-all rounded-xl text-slate-900"
-                value={labData[LAB_ORDER[currentStep]]}
-                onChange={(e) => handleInputChange(LAB_ORDER[currentStep], e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && (currentStep < 4 ? setCurrentStep(currentStep + 1) : setShowResults(true))}
-                autoFocus
-              />
-            </div>
-            <div className="flex justify-center gap-4">
-              {currentStep > 0 && <button onClick={() => setCurrentStep(currentStep - 1)} className="text-[10px] font-bold text-slate-400 uppercase">Назад</button>}
-              <button onClick={() => (currentStep < 4 ? setCurrentStep(currentStep + 1) : setShowResults(true))} className="bg-indigo-600 text-white px-8 py-2 rounded-xl font-black text-xs uppercase shadow-lg">
-                {currentStep === 4 ? 'Готово' : 'Далее'}
+          <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 text-center">
+            <h2 className="text-lg font-black text-slate-400 uppercase tracking-widest mb-6">{LAB_LABELS[LAB_ORDER[currentStep]]}</h2>
+            <input type="text" inputMode="decimal" className="w-full text-center text-6xl font-mono font-black py-4 bg-slate-50 border-b-8 border-slate-100 focus:border-indigo-600 outline-none rounded-2xl"
+              value={labData[LAB_ORDER[currentStep]]} onChange={(e) => setLabData(p => ({ ...p, [LAB_ORDER[currentStep]]: e.target.value }))}
+              onKeyDown={(e) => e.key === 'Enter' && (currentStep < 4 ? setCurrentStep(currentStep + 1) : setShowResults(true))} autoFocus />
+            <div className="flex justify-center mt-8 gap-4">
+              <button onClick={() => (currentStep < 4 ? setCurrentStep(currentStep + 1) : setShowResults(true))} className="bg-indigo-600 text-white px-12 py-4 rounded-2xl font-black uppercase shadow-xl hover:bg-indigo-700">
+                {currentStep === 4 ? 'Рассчитать' : 'Продолжить'}
               </button>
             </div>
           </div>
         )}
 
-        {/* Компактные результаты */}
-        {showResults && (
-          <div className={`rounded-2xl border-2 overflow-hidden animate-in zoom-in-95 duration-300 ${isDataValid ? 'border-emerald-500/30' : 'border-amber-500/30'}`}>
-            <div className={`px-4 py-3 text-white flex justify-between items-center ${isDataValid ? 'bg-emerald-600' : 'bg-amber-600'}`}>
-              <h3 className="text-sm font-black uppercase tracking-widest">Результаты анализа</h3>
-              <div className="flex gap-2">
-                <button onClick={() => setShowResults(false)} className="text-[9px] bg-black/20 px-2 py-1 rounded-md font-black">ПРАВИТЬ ШАГИ</button>
-                {isLiveActive && <button onClick={() => { stopLiveSession(); setTimeout(startLiveSession, 100); }} className="text-[9px] bg-white/20 px-2 py-1 rounded-md border border-white/20 font-black">ОБСУДИТЬ</button>}
+        {showResults && results && (
+          <div className="space-y-4 animate-in fade-in zoom-in-95">
+            <div className="bg-white rounded-3xl overflow-hidden shadow-2xl border border-slate-100">
+              <div className="bg-indigo-600 p-6 text-white flex justify-between items-center">
+                <h3 className="text-lg font-black uppercase">Протокол испытаний</h3>
+                <div className="flex gap-2">
+                  <button onClick={() => setShowChartModal(true)} className="bg-emerald-500 hover:bg-emerald-600 text-white px-5 py-2 rounded-lg text-xs font-black uppercase transition-all shadow-lg flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path></svg>
+                    Графики
+                  </button>
+                  <button onClick={exportWord} className="bg-white/20 hover:bg-white/40 px-3 py-2 rounded-lg text-[10px] font-black uppercase transition-all">Word</button>
+                  <button onClick={() => setShowStylePicker(true)} className="bg-white text-indigo-700 px-4 py-2 rounded-lg text-[10px] font-black uppercase shadow-lg hover:bg-slate-50 transition-all">Презентация</button>
+                </div>
               </div>
-            </div>
-            
-            <div className="bg-white p-4 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Editable Inputs */}
-                <div className="space-y-1.5">
-                  <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Исходные данные (редактируемые)</p>
-                  {LAB_ORDER.map((key) => (
-                    <div key={key} className="flex justify-between items-center px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-100 focus-within:border-indigo-300 transition-colors">
-                      <span className="text-[10px] font-bold text-slate-500">{LAB_LABELS[key]}</span>
-                      <input 
-                        type="text"
-                        className="text-xs font-mono font-black text-slate-800 bg-transparent text-right outline-none w-20"
-                        value={labData[key]}
-                        onChange={(e) => handleInputChange(key, e.target.value)}
-                      />
-                    </div>
+              <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-3">
+                  {LAB_ORDER.map(k => (
+                    <div key={k} className="flex justify-between border-b pb-1 text-sm"><span className="text-slate-500">{LAB_LABELS[k]}</span><span className="font-mono font-black">{labData[k]}</span></div>
                   ))}
-                  {/* Additional Derived Calculation POE */}
-                  <div className="flex justify-between items-center px-3 py-1.5 bg-indigo-50/50 rounded-lg border border-indigo-100">
-                    <span className="text-[10px] font-bold text-indigo-600">ПОЕ (полная обменная емк.)</span>
-                    <span className="text-xs font-mono font-black text-indigo-700">{results?.poe.toFixed(2) || '---'}</span>
+                  <div className="space-y-1 pt-2">
+                    <div className="flex justify-between border-b pb-1 text-sm"><span className="text-slate-500">PV (Пластическая вязкость)</span><span className="font-mono font-black">{results.pv.toFixed(2)}</span></div>
+                    <div className="flex justify-between border-b pb-1 text-sm"><span className="text-slate-500">YP (Предел текучести)</span><span className="font-mono font-black">{results.yp.toFixed(2)}</span></div>
+                    <div className="flex justify-between border-b pb-1 text-sm"><span className="text-slate-500">Эфф. вязкость (f600/2)</span><span className="font-mono font-black">{results.f.toFixed(2)}</span></div>
+                    <div className="flex justify-between border-b pb-1 text-sm"><span className="text-slate-500">YP/PV</span><span className="font-mono font-black">{results.ypPvRatio.toFixed(2)}</span></div>
+                    <div className="flex justify-between font-black text-indigo-600 bg-indigo-50 p-2 rounded mt-2"><span>ПОЕ (полная емкость)</span><span>{results.poe.toFixed(2)}</span></div>
                   </div>
                 </div>
-
-                {/* Main Results */}
-                <div className="space-y-2">
-                  <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Реологические параметры</p>
-                  {[
-                    { label: 'F (Конст)', val: results?.f.toFixed(2), color: 'text-emerald-600', formula: 'f600/2' },
-                    { label: 'PV (Вязк)', val: results?.pv.toFixed(2), color: 'text-indigo-600', formula: 'f600-f300' },
-                    { label: 'YP (Текуч)', val: results?.yp.toFixed(2), color: 'text-rose-600', formula: 'f300-PV' },
-                    { label: 'YP/PV', val: results?.ypPvRatio.toFixed(2), color: 'text-slate-600', formula: 'YP/PV' },
-                    { label: 's (Степень зам.)', val: results?.s.toFixed(2), color: 'text-slate-600', formula: 'YP/f600' },
-                  ].map((item, i) => (
-                    <div key={i} className="flex justify-between items-center p-2.5 bg-white rounded-xl border border-slate-100 shadow-sm">
-                      <div>
-                        <span className="font-black text-[10px] text-slate-900 block leading-none">{item.label}</span>
-                        <span className="text-[7px] font-mono text-slate-400">{item.formula}</span>
-                      </div>
-                      <span className={`font-mono text-lg font-black ${item.color}`}>{item.val || '---'}</span>
-                    </div>
-                  ))}
+                <div className="grid grid-cols-2 gap-4">
+                   {[{ l: 'Изотропия', v: results.isotropy.toFixed(4) }, { l: 'Генерация', v: results.generation.toFixed(2) }, { l: 'Загущение', v: results.thickening.toFixed(2) }, { l: 'Полнота', v: results.completeness.toFixed(2) }].map(c => (
+                     <div key={c.l} className="bg-slate-50 p-4 rounded-xl border flex flex-col items-center shadow-inner">
+                       <span className="text-[10px] font-black text-slate-400 uppercase">{c.l}</span>
+                       <span className="text-xl font-mono font-black text-indigo-700">{c.v}</span>
+                     </div>
+                   ))}
                 </div>
               </div>
+            </div>
 
-              {/* Criteria Section - Light Blue Background */}
-              <div className="bg-sky-50 p-4 rounded-2xl border border-sky-100 space-y-3">
-                <p className="text-[9px] font-black text-sky-600 uppercase tracking-widest text-center mb-2">Технологические критерии</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                  {[
-                    { label: 'Изотропия', val: results?.isotropy.toFixed(4), desc: 'Структурная стабильность' },
-                    { label: 'Генерация', val: results?.generation.toFixed(2), desc: 'Эффективность фаз' },
-                    { label: 'Загущение', val: results?.thickening.toFixed(2), desc: 'Реакция на электролиты' },
-                    { label: 'Полнота', val: results?.completeness.toFixed(2), desc: 'Качество очистки' },
-                  ].map((crit, idx) => (
-                    <div key={idx} className="bg-white p-3 rounded-xl border border-sky-200 shadow-sm flex flex-col items-center">
-                      <span className="text-[9px] font-black text-slate-500 uppercase">{crit.label}</span>
-                      <span className="text-xl font-mono font-black text-sky-700 my-1">{crit.val || '---'}</span>
-                      <span className="text-[7px] text-slate-400 text-center leading-tight">{crit.desc}</span>
-                    </div>
-                  ))}
-                </div>
+            <div className="bg-white rounded-3xl p-8 shadow-2xl border border-slate-100">
+              <div className="flex justify-between items-center mb-6">
+                <h4 className="text-xl font-black text-slate-900">Выводы по качеству</h4>
+                <button onClick={handleGetConclusions} disabled={isAnalyzing} className="text-[10px] bg-emerald-600 text-white px-4 py-2 rounded-lg font-black uppercase hover:bg-emerald-700">{isAnalyzing ? 'Анализ...' : 'Обновить анализ'}</button>
+              </div>
+              <div className="space-y-3">
+                {conclusions.length === 0 && !isAnalyzing && <p className="text-center text-slate-400 py-10 italic">Нажмите кнопку выше для формирования экспертных выводов</p>}
+                {conclusions.map((c, i) => (
+                  <div key={i} className="flex gap-4 p-4 bg-emerald-50/30 rounded-2xl border border-emerald-100/50 hover:bg-white transition-all shadow-sm">
+                    <span className="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center font-black">{i+1}</span>
+                    <p className="text-sm font-semibold text-slate-700 leading-relaxed">{c}</p>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
         )}
       </div>
+
+      {showChartModal && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center z-[70] p-4">
+          <div className="bg-white w-full max-w-5xl rounded-3xl overflow-hidden shadow-2xl flex flex-col md:flex-row h-[90vh] animate-slide-up">
+            <div className="p-6 bg-slate-50 border-r w-full md:w-72 shrink-0 flex flex-col">
+              <h5 className="font-black text-lg uppercase text-slate-800 mb-6 flex items-center gap-2">
+                 <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                 Анализ 3D
+              </h5>
+              <div className="space-y-6 flex-grow overflow-y-auto pr-2">
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-500 mb-2 block tracking-widest">Ось X (Параметр 1)</label>
+                  <select value={axisX} onChange={(e) => setAxisX(e.target.value as any)} className="w-full bg-white border-2 border-slate-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:border-indigo-600 transition-all">
+                    {Object.entries(CHART_VARIABLES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-500 mb-2 block tracking-widest">Ось Y (Параметр 2)</label>
+                  <select value={axisY} onChange={(e) => setAxisY(e.target.value as any)} className="w-full bg-white border-2 border-slate-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:border-indigo-600 transition-all">
+                    {Object.entries(CHART_VARIABLES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  </select>
+                </div>
+                <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 mt-4 space-y-2">
+                  <p className="text-[11px] text-indigo-900 font-bold leading-relaxed">
+                    Этот инструмент строит поверхность зависимости <span className="text-indigo-600">Критерия Полноты</span> от выбранных параметров.
+                  </p>
+                  <p className="text-[10px] text-slate-500 font-medium italic">
+                    Диапазоны: f600 (15-120), YP (5-60), m (40-100), q (40-120).
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setShowChartModal(false)} className="mt-8 w-full py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl hover:bg-black transition-all">Закрыть окно</button>
+            </div>
+            <div className="flex-grow flex items-center justify-center bg-white p-4 relative min-h-0 overflow-hidden">
+               {/* Plotly container */}
+               <div ref={chartRef} className="w-full h-full"></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showStylePicker && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-end md:items-center justify-center z-50 p-4">
+          <div className="bg-white w-full max-w-lg rounded-3xl p-6 shadow-2xl animate-slide-up">
+            <h5 className="text-lg font-black uppercase mb-4 text-center">Стиль презентации</h5>
+            <div className="grid grid-cols-2 gap-3">
+              {PPT_STYLES.map(s => (
+                <button key={s.id} onClick={() => createPPTX(s)} className="p-4 rounded-2xl border-2 flex items-center gap-3 transition-all hover:border-indigo-600 text-left group">
+                  <div className="w-8 h-8 rounded-lg shadow-inner" style={{ background: s.primary }}></div>
+                  <span className="font-bold text-sm text-slate-700 group-hover:text-indigo-600">{s.name}</span>
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setShowStylePicker(false)} className="w-full mt-6 py-3 font-black text-slate-400 uppercase tracking-widest text-xs">Отмена</button>
+          </div>
+        </div>
+      )}
+
+      {isGeneratingDoc && (
+        <div className="fixed inset-0 bg-indigo-600/90 flex flex-col items-center justify-center z-[80] text-white">
+          <div className="w-16 h-16 border-4 border-white/30 border-t-white rounded-full animate-spin mb-4"></div>
+          <p className="text-lg font-black uppercase tracking-widest">Обработка...</p>
+        </div>
+      )}
     </div>
   );
 };
