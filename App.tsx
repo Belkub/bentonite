@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
 import { LabData, LabKey, LAB_LABELS, LAB_ORDER, CalculationResult, Conclusion, SavedChart } from './types';
@@ -15,16 +14,16 @@ import PptxGenJS from 'pptxgenjs';
 
 declare var Plotly: any;
 
-// Use a unique name for the interface to avoid global namespace conflicts
-interface AIStudioInterface {
+// Renamed interface to match existing global type declaration for window.aistudio
+interface AIStudio {
   hasSelectedApiKey(): Promise<boolean>;
   openSelectKey(): Promise<void>;
 }
 
 declare global {
   interface Window {
-    // Make optional to match environment-specific declarations and avoid modifier conflicts
-    aistudio?: AIStudioInterface;
+    // Property 'aistudio' must match the expected type name 'AIStudio' in the global scope
+    aistudio?: AIStudio;
   }
 }
 
@@ -72,12 +71,12 @@ const App: React.FC = () => {
   const [savedCharts, setSavedCharts] = useState<SavedChart[]>([]);
   const chartRef = useRef<HTMLDivElement>(null);
 
-  // Обработка ключа API для AI Studio
   useEffect(() => {
     const checkKey = async () => {
-      if (window.aistudio) {
+      // Только если мы в среде AI Studio
+      if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
         const hasKey = await window.aistudio.hasSelectedApiKey();
-        if (!hasKey) {
+        if (!hasKey && typeof window.aistudio.openSelectKey === 'function') {
           await window.aistudio.openSelectKey();
         }
       }
@@ -191,7 +190,7 @@ const App: React.FC = () => {
       if (err.message?.includes("Requested entity was not found") && window.aistudio) {
         await window.aistudio.openSelectKey();
       }
-      setAnalysisError("Ошибка связи с ИИ.");
+      setAnalysisError("Ошибка связи с ИИ. Проверьте API_KEY.");
     } finally { setIsAnalyzing(false); }
   };
 
@@ -241,13 +240,11 @@ const App: React.FC = () => {
   const [isLiveActive, setIsLiveActive] = useState(false);
   const sessionRef = useRef<any>(null);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-  // Tracks the next scheduled start time for gapless audio playback
   const nextStartTimeRef = useRef<number>(0);
 
   const startLiveSession = async () => {
     if (isLiveActive) { sessionRef.current?.close(); setIsLiveActive(false); return; }
     try {
-      // Create a fresh instance for the session to ensure latest API key is used
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const ctxIn = new AudioContext({ sampleRate: 16000 });
@@ -265,7 +262,6 @@ const App: React.FC = () => {
             setIsLiveActive(true);
             const source = ctxIn.createMediaStreamSource(stream);
             const proc = ctxIn.createScriptProcessor(4096, 1, 1);
-            // Use sessionPromise to prevent race conditions during connection
             proc.onaudioprocess = (e) => { 
               sessionPromise.then(s => s.sendRealtimeInput({ media: createBlob(e.inputBuffer.getChannelData(0)) })); 
             };
@@ -275,7 +271,6 @@ const App: React.FC = () => {
           onmessage: async (msg: LiveServerMessage) => {
             const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
             if (audioData) {
-              // Gapless playback scheduling
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctxOut.currentTime);
               const buffer = await decodeAudioData(decode(audioData), ctxOut, 24000, 1);
               const source = ctxOut.createBufferSource(); 
@@ -289,7 +284,6 @@ const App: React.FC = () => {
               sourcesRef.current.add(source);
             }
 
-            // Handle session interruption
             if (msg.serverContent?.interrupted) {
               for (const source of sourcesRef.current.values()) {
                 try { source.stop(); } catch (e) {}
@@ -403,6 +397,7 @@ const App: React.FC = () => {
                    {isAnalyzing ? 'Изучаю...' : 'Обновить'}
                 </button>
               </div>
+              {analysisError && <div className="p-4 bg-red-50 text-red-700 text-xs rounded-xl mb-4 font-bold">{analysisError}</div>}
               <div className="space-y-4">
                 {conclusions.map((c, i) => {
                   const isNeg = c.sentiment === 'negative';
@@ -445,7 +440,7 @@ const App: React.FC = () => {
 
       {showStylePicker && (
         <div className="fixed inset-0 bg-slate-900/70 flex items-center justify-center z-[80] p-4">
-          <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl">
+          <div className="bg-white w-full max-sm rounded-[2.5rem] p-8 shadow-2xl">
             <h5 className="text-lg font-black uppercase mb-6 text-center">Стиль презентации</h5>
             <div className="grid gap-3">
               {PPT_STYLES.map(s => (
