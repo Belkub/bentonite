@@ -280,7 +280,7 @@ const App: React.FC = () => {
       ...conclusions.map((c, i) => new Paragraph({ 
         spacing: { before: 120 }, 
         children: [
-          new TextRun({ text: `${i + 1}. `, bold: true, color: c.sentiment === 'negative' ? "b45309" : "10b981" }), 
+          new TextRun({ text: `${i + 1}. `, bold: true, color: c.sentiment.toLowerCase() === 'negative' ? "b45309" : "10b981" }), 
           new TextRun({ text: c.text })
         ] 
       })),
@@ -349,7 +349,7 @@ const App: React.FC = () => {
       const s4 = pptx.addSlide({ masterName: 'MASTER_SLIDE' });
       s4.addText('Экспертные выводы', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
       conclusions.forEach((c, i) => {
-        const color = c.sentiment === 'negative' ? 'b45309' : style.primary;
+        const color = c.sentiment.toLowerCase() === 'negative' ? 'b45309' : style.primary;
         s4.addText(`${i+1}. ${c.text}`, { x: 0.5, y: 2 + i * 0.7, w: 9, fontSize: 14, color });
       });
 
@@ -541,10 +541,14 @@ const App: React.FC = () => {
               <div className="space-y-3">
                 {conclusions.length === 0 && !isAnalyzing && <p className="text-center text-slate-400 py-10 italic">Нажмите кнопку выше для формирования экспертных выводов</p>}
                 {conclusions.map((c, i) => {
-                  const isNegative = c.sentiment === 'negative';
-                  const bgColor = isNegative ? 'bg-amber-50/70 border-amber-200' : 'bg-emerald-50/70 border-emerald-200';
+                  const sent = c.sentiment?.toLowerCase() || 'neutral';
+                  const isNegative = sent === 'negative';
+                  
+                  // Прописываем классы полностью, чтобы Tailwind JIT точно их включил в сборку
+                  const bgColor = isNegative ? 'bg-amber-100 border-amber-200' : 'bg-emerald-100 border-emerald-200';
                   const dotColor = isNegative ? 'bg-amber-600' : 'bg-emerald-600';
                   const textColor = isNegative ? 'text-amber-900' : 'text-emerald-900';
+                  
                   return (
                     <div key={i} className={`flex gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm ${bgColor}`}>
                       <span className={`flex-shrink-0 w-8 h-8 rounded-full text-white flex items-center justify-center font-black ${dotColor}`}>{i+1}</span>
