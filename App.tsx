@@ -277,13 +277,17 @@ const App: React.FC = () => {
       }),
       new Paragraph({ text: "", spacing: { before: 400 } }),
       new Paragraph({ children: [new TextRun({ text: "ЭКСПЕРТНЫЕ ВЫВОДЫ:", bold: true, size: 28, color: "10b981" })], spacing: { after: 200 } }),
-      ...conclusions.map((c, i) => new Paragraph({ 
-        spacing: { before: 120 }, 
-        children: [
-          new TextRun({ text: `${i + 1}. `, bold: true, color: c.sentiment.toLowerCase() === 'negative' ? "b45309" : "10b981" }), 
-          new TextRun({ text: c.text })
-        ] 
-      })),
+      ...conclusions.map((c, i) => {
+        const sentValue = c.sentiment?.toLowerCase().trim() || 'neutral';
+        const isNeg = sentValue === 'negative' || sentValue.includes('негат');
+        return new Paragraph({ 
+          spacing: { before: 120 }, 
+          children: [
+            new TextRun({ text: `${i + 1}. `, bold: true, color: isNeg ? "b45309" : "10b981" }), 
+            new TextRun({ text: c.text })
+          ] 
+        });
+      }),
     ];
 
     if (savedCharts.length > 0) {
@@ -349,7 +353,9 @@ const App: React.FC = () => {
       const s4 = pptx.addSlide({ masterName: 'MASTER_SLIDE' });
       s4.addText('Экспертные выводы', { x: 0.5, y: 1.2, fontSize: 28, bold: true, color: style.primary });
       conclusions.forEach((c, i) => {
-        const color = c.sentiment.toLowerCase() === 'negative' ? 'b45309' : style.primary;
+        const sv = c.sentiment?.toLowerCase().trim() || 'neutral';
+        const isN = sv === 'negative' || sv.includes('негат');
+        const color = isN ? 'b45309' : style.primary;
         s4.addText(`${i+1}. ${c.text}`, { x: 0.5, y: 2 + i * 0.7, w: 9, fontSize: 14, color });
       });
 
@@ -541,18 +547,19 @@ const App: React.FC = () => {
               <div className="space-y-3">
                 {conclusions.length === 0 && !isAnalyzing && <p className="text-center text-slate-400 py-10 italic">Нажмите кнопку выше для формирования экспертных выводов</p>}
                 {conclusions.map((c, i) => {
-                  const sent = c.sentiment?.toLowerCase() || 'neutral';
-                  const isNegative = sent === 'negative';
+                  // Нормализуем sentiment для более точного сравнения
+                  const sentimentRaw = c.sentiment?.toLowerCase().trim() || 'neutral';
+                  const isNegative = sentimentRaw === 'negative' || sentimentRaw.includes('негат');
                   
-                  // Прописываем классы полностью, чтобы Tailwind JIT точно их включил в сборку
-                  const bgColor = isNegative ? 'bg-amber-100 border-amber-200' : 'bg-emerald-100 border-emerald-200';
-                  const dotColor = isNegative ? 'bg-amber-600' : 'bg-emerald-600';
-                  const textColor = isNegative ? 'text-amber-900' : 'text-emerald-900';
+                  // Прямые классы Tailwind для фонов, чтобы CDN версия их точно применила
+                  const bgColorClass = isNegative ? 'bg-amber-100 border-amber-200' : 'bg-emerald-100 border-emerald-200';
+                  const dotColorClass = isNegative ? 'bg-amber-600' : 'bg-emerald-600';
+                  const textColorClass = isNegative ? 'text-amber-900' : 'text-emerald-900';
                   
                   return (
-                    <div key={i} className={`flex gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm ${bgColor}`}>
-                      <span className={`flex-shrink-0 w-8 h-8 rounded-full text-white flex items-center justify-center font-black ${dotColor}`}>{i+1}</span>
-                      <p className={`text-sm font-semibold leading-relaxed ${textColor}`}>{c.text}</p>
+                    <div key={i} className={`flex gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm ${bgColorClass}`}>
+                      <span className={`flex-shrink-0 w-8 h-8 rounded-full text-white flex items-center justify-center font-black ${dotColorClass}`}>{i+1}</span>
+                      <p className={`text-sm font-semibold leading-relaxed ${textColorClass}`}>{c.text}</p>
                     </div>
                   );
                 })}
