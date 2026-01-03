@@ -16,13 +16,15 @@ import PptxGenJS from 'pptxgenjs';
 
 declare var Plotly: any;
 
-// Declare window extension for AIStudio
+/**
+ * Augment the global AIStudio interface to provide type definitions for the specialized
+ * API key selection methods provided by the environment. This avoids conflicts with
+ * existing property declarations on the Window interface.
+ */
 declare global {
-  interface Window {
-    aistudio: {
-      hasSelectedApiKey: () => Promise<boolean>;
-      openSelectKey: () => Promise<void>;
-    };
+  interface AIStudio {
+    hasSelectedApiKey(): Promise<boolean>;
+    openSelectKey(): Promise<void>;
   }
 }
 
@@ -74,8 +76,10 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const checkApiKey = async () => {
-      if (window.aistudio) {
-        const hasKey = await window.aistudio.hasSelectedApiKey();
+      // Use window access for aistudio with the augmented type
+      const aistudio = (window as any).aistudio as AIStudio | undefined;
+      if (aistudio) {
+        const hasKey = await aistudio.hasSelectedApiKey();
         setNeedsApiKey(!hasKey);
       }
     };
@@ -83,8 +87,9 @@ const App: React.FC = () => {
   }, []);
 
   const handleSelectKey = async () => {
-    if (window.aistudio) {
-      await window.aistudio.openSelectKey();
+    const aistudio = (window as any).aistudio as AIStudio | undefined;
+    if (aistudio) {
+      await aistudio.openSelectKey();
       // Assume success after trigger to avoid race conditions
       setNeedsApiKey(false);
     }
@@ -259,7 +264,18 @@ const App: React.FC = () => {
     if (!results) return;
     const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, VerticalAlign, ImageRun } = docx;
 
-    const createCell = (text: string, bold = false, align = AlignmentType.CENTER) => new TableCell({
+    // Helper to safely convert base64 to Uint8Array for Word binary images
+    const base64ToUint8Array = (base64: string) => {
+      const binaryString = window.atob(base64);
+      const len = binaryString.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return bytes;
+    };
+
+    const createCell = (text: string, bold = false, align: any = "center") => new TableCell({
       children: [new Paragraph({ 
         children: [new TextRun({ text: String(text), bold, size: 22 })],
         alignment: align
@@ -270,7 +286,6 @@ const App: React.FC = () => {
 
     const rows = [
       ["Содержание смектита (m)", `${results.m}%`],
-      // Fix: Argument of type 'number' is not assignable to parameter of type 'string'.
       ["Обменная емкость (q)", String(results.q)],
       ["Влажность (w)", `${results.w}%`],
       ["PV (Пластическая вязкость)", results.pv.toFixed(2)],
@@ -286,7 +301,7 @@ const App: React.FC = () => {
 
     const children: any[] = [
       new Paragraph({
-        alignment: AlignmentType.CENTER,
+        alignment: "center",
         spacing: { after: 400 },
         children: [new TextRun({ text: "ОТЧЕТ ОБ ИСПЫТАНИИ БЕНТОНИТА", bold: true, size: 32, color: "4f46e5" })],
       }),
@@ -294,26 +309,39 @@ const App: React.FC = () => {
         width: { size: 100, type: WidthType.PERCENTAGE },
         rows: [
           new TableRow({ children: [createCell("Параметр", true), createCell("Значение", true)] }),
-          ...rows.map(row => new TableRow({ children: [createCell(row[0], false, AlignmentType.LEFT), createCell(row[1] as string, false, AlignmentType.CENTER)] }))
+          ...rows.map(row => new TableRow({ 
+            children: [
+              createCell(row[0], false, "left"), 
+              createCell(row[1], false, "center")
+            ] 
+          }))
         ],
       }),
       new Paragraph({ text: "", spacing: { before: 400 } }),
       new Paragraph({ children: [new TextRun({ text: "ЭКСПЕРТНЫЕ ВЫВОДЫ:", bold: true, size: 28, color: "10b981" })], spacing: { after: 200 } }),
-      ...conclusions.map((c, i) => new Paragraph({ spacing: { before: 120 }, children: [new TextRun({ text: `${i + 1}. `, bold: true, color: c.sentiment === 'negative' ? "b45309" : "10b981" }), new TextRun({ text: c.text })] })),
+      ...conclusions.map((c, i) => new Paragraph({ 
+        spacing: { before: 120 }, 
+        children: [
+          new TextRun({ text: `${i + 1}. `, bold: true, color: c.sentiment === 'negative' ? "b45309" : "10b981" }), 
+          new TextRun({ text: c.text })
+        ] 
+      })),
     ];
 
     // Include all saved charts
     if (savedCharts.length > 0) {
       children.push(new Paragraph({ text: "", spacing: { before: 400 } }));
-      children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "ГРАФИЧЕСКИЙ АНАЛИЗ ПОЛНОТЫ", bold: true, size: 28, color: "4f46e5" })] }));
+      children.push(new Paragraph({ alignment: "center", children: [new TextRun({ text: "ГРАФИЧЕСКИЙ АНАЛИЗ ПОЛНОТЫ", bold: true, size: 28, color: "4f46e5" })] }));
       
       savedCharts.forEach(chart => {
-        const base64 = chart.imageData.split(',')[1];
-        children.push(new Paragraph({ spacing: { before: 200 }, alignment: AlignmentType.CENTER, children: [new TextRun({ text: `Зависимость от ${chart.axisX} и ${chart.axisY}`, bold: true, size: 20 })] }));
+        const base64Data = chart.imageData.split(',')[1];
+        const bytes = base64ToUint8Array(base64Data);
+        
+        children.push(new Paragraph({ spacing: { before: 200 }, alignment: "center", children: [new TextRun({ text: `Зависимость от ${chart.axisX} и ${chart.axisY}`, bold: true, size: 20 })] }));
         children.push(new Paragraph({
-          alignment: AlignmentType.CENTER,
+          alignment: "center",
           children: [new ImageRun({
-            data: Uint8Array.from(atob(base64), ch => ch.charCodeAt(0)),
+            data: bytes,
             transformation: { width: 500, height: 375 }
           })]
         }));

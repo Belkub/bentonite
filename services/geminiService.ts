@@ -15,12 +15,16 @@ export async function extractLabDataFromImage(base64Image: string): Promise<Part
       ]
     },
     config: {
-      responseMimeType: "application/json"
+      // responseMimeType is not supported for gemini-3-pro-image-preview (nano banana series)
     }
   });
 
   try {
-    return JSON.parse(response.text || '{}');
+    // Attempt to parse JSON from the extracted text.
+    const text = response.text || '{}';
+    // Clean up potential markdown code blocks returned by the model
+    const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    return JSON.parse(jsonStr);
   } catch (e) {
     console.error("Failed to parse image analysis result", e);
     return {};
