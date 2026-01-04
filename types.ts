@@ -46,7 +46,7 @@ export const LAB_LABELS: Record<LabKey, string> = {
   w: 'Влажность (%)',
   f300: 'Фи 300',
   f600: 'Фи 600',
-  s_equiv: 'Влага ПАВ, %',
+  s_equiv: 'Влага глины, %',
   mm: 'ММ ПАВ, моль'
 };
 

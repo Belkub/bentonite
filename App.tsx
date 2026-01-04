@@ -15,19 +15,8 @@ import PptxGenJS from 'pptxgenjs';
 
 declare var Plotly: any;
 
-// Global type augmentation for environment-provided aistudio object
-// Defining AIStudio interface separately to satisfy conflict requirements
-interface AIStudio {
-  hasSelectedApiKey(): Promise<boolean>;
-  openSelectKey(): Promise<void>;
-}
-
-declare global {
-  interface Window {
-    // The environment expects 'aistudio' to be of type 'AIStudio' and typically optional
-    aistudio?: AIStudio;
-  }
-}
+// The environment already provides aistudio on the global window object.
+// We use type casting to (window as any) to access its members to avoid redeclaring conflicts.
 
 type PPTStyle = {
   id: string;
@@ -75,11 +64,13 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const checkKey = async () => {
-      if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
+      // Cast window to any to avoid property conflict errors with pre-configured environment objects
+      const aistudio = (window as any).aistudio;
+      if (aistudio && typeof aistudio.hasSelectedApiKey === 'function') {
         try {
-          const hasKey = await window.aistudio.hasSelectedApiKey();
-          if (!hasKey && typeof window.aistudio.openSelectKey === 'function') {
-            await window.aistudio.openSelectKey();
+          const hasKey = await aistudio.hasSelectedApiKey();
+          if (!hasKey && typeof aistudio.openSelectKey === 'function') {
+            await aistudio.openSelectKey();
           }
         } catch (err) {
           console.warn("AI Studio key check skipped:", err);
@@ -223,8 +214,9 @@ const App: React.FC = () => {
       setConclusions(cons);
     } catch (err: any) {
       console.error(err);
-      if (err.message?.includes("Requested entity was not found") && window.aistudio) {
-        await window.aistudio.openSelectKey();
+      const aistudio = (window as any).aistudio;
+      if (err.message?.includes("Requested entity was not found") && aistudio) {
+        await aistudio.openSelectKey();
       }
       setAnalysisError("Ошибка связи с ИИ. Проверьте API_KEY.");
     } finally { setIsAnalyzing(false); }
