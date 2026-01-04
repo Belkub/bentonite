@@ -5,6 +5,8 @@ export interface LabData {
   w: string; // влажность
   f300: string; // фи 300
   f600: string; // фи 600
+  s_equiv: string; // влага ПАВ
+  mm: string; // ММ ПАВ
 }
 
 export type LabKey = keyof LabData;
@@ -35,6 +37,7 @@ export interface CalculationResult {
   generation: number;
   thickening: number;
   completeness: number;
+  equivalent?: number;
 }
 
 export const LAB_LABELS: Record<LabKey, string> = {
@@ -42,7 +45,9 @@ export const LAB_LABELS: Record<LabKey, string> = {
   q: 'Обменная емкость (КОЕ)',
   w: 'Влажность (%)',
   f300: 'Фи 300',
-  f600: 'Фи 600'
+  f600: 'Фи 600',
+  s_equiv: 'Влага ПАВ, %',
+  mm: 'ММ ПАВ, моль'
 };
 
-export const LAB_ORDER: LabKey[] = ['m', 'q', 'w', 'f300', 'f600'];
+export const LAB_ORDER: LabKey[] = ['m', 'q', 'w', 'f300', 'f600', 's_equiv', 'mm'];

@@ -15,7 +15,8 @@ import PptxGenJS from 'pptxgenjs';
 
 declare var Plotly: any;
 
-// Используем интерфейс, соответствующий глобальным типам среды AI Studio
+// Global type augmentation for environment-provided aistudio object
+// Defining AIStudio interface separately to satisfy conflict requirements
 interface AIStudio {
   hasSelectedApiKey(): Promise<boolean>;
   openSelectKey(): Promise<void>;
@@ -23,6 +24,7 @@ interface AIStudio {
 
 declare global {
   interface Window {
+    // The environment expects 'aistudio' to be of type 'AIStudio' and typically optional
     aistudio?: AIStudio;
   }
 }
@@ -53,7 +55,7 @@ const CHART_VARIABLES = {
 
 const App: React.FC = () => {
   const [labData, setLabData] = useState<LabData>({
-    m: '', q: '', w: '', f300: '', f600: '',
+    m: '', q: '', w: '', f300: '', f600: '', s_equiv: '', mm: ''
   });
   const [currentStep, setCurrentStep] = useState(0);
   const [showResults, setShowResults] = useState(false);
@@ -73,7 +75,6 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const checkKey = async () => {
-      // Только в среде AI Studio
       if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
         try {
           const hasKey = await window.aistudio.hasSelectedApiKey();
@@ -89,9 +90,9 @@ const App: React.FC = () => {
   }, []);
 
   const results = useMemo((): CalculationResult | null => {
-    const { m, q, w, f300, f600 } = labData;
-    const parse = (val: string) => {
-        const cleaned = val.replace(',', '.').trim();
+    const { m, q, w, f300, f600, s_equiv, mm } = labData;
+    const parse = (val: string | number) => {
+        const cleaned = (val ?? '').toString().replace(',', '.').trim();
         return cleaned === '' ? NaN : parseFloat(cleaned);
     };
     
@@ -109,7 +110,7 @@ const App: React.FC = () => {
     const f = f6_val / 2;
     const poe = q_val / (1 - 0.01 * w_val);
     const ypPvRatio = pv !== 0 ? yp / pv : 0;
-    const s = f6_val !== 0 ? yp / f6_val : 0;
+    const s_ratio = f6_val !== 0 ? yp / f6_val : 0;
     
     const isotropy = (f6_val !== 0) 
       ? (0.5 - Math.pow(((yp / f6_val) - 0.5), 2)) * m_val * m_val * 0.01 * 0.01 
@@ -120,15 +121,51 @@ const App: React.FC = () => {
     const thickening = (m_val !== 0 && q_val !== 0 && f6_val !== 0) ? f6_val / (0.01 * 0.01 * m_val * m_val * q_val) : 0;
     const logArg = f6_val !== 0 ? f6_val * 0.001 : 0.06;
     const logVal = logArg > 0 ? Math.log10(logArg) : 0;
-    const completeness = (s !== 0) 
-      ? (q_val * 0.01 * m_val * 0.01 * m_val * Math.pow(logVal, 2)) / s 
+    const completeness = (s_ratio !== 0) 
+      ? (q_val * 0.01 * m_val * 0.01 * m_val * Math.pow(logVal, 2)) / s_ratio 
       : 0;
     
+    // Equivalent Calculation
+    let equivalent: number | undefined = undefined;
+    const s_equiv_val = parse(s_equiv);
+    const mm_val = parse(mm);
+    if (!isNaN(s_equiv_val) && !isNaN(mm_val)) {
+      equivalent = (q_val / (1 - w_val * 0.01)) * 10 * 0.001 * mm_val * (1 - s_equiv_val * 0.01);
+    }
+
     return { 
       m: m_val, q: q_val, w: w_val, f, pv, yp,
-      poe, ypPvRatio, s, isotropy, generation, thickening, completeness
+      poe, ypPvRatio, s: s_ratio, isotropy, generation, thickening, completeness,
+      equivalent
     };
   }, [labData]);
+
+  const getCriterionStyle = (type: string, value: number) => {
+    switch (type) {
+      case 'YP/PV':
+        if (value > 6) return 'bg-rose-100 border-rose-200 text-rose-900';
+        if (value > 3) return 'bg-amber-100 border-amber-200 text-amber-900';
+        return 'bg-emerald-100 border-emerald-200 text-emerald-900';
+      case 'Изотропия':
+        if (value < 0.2) return 'bg-rose-100 border-rose-200 text-rose-900';
+        if (value < 0.24) return 'bg-amber-100 border-amber-200 text-amber-900';
+        return 'bg-emerald-100 border-emerald-200 text-emerald-900';
+      case 'Генерация':
+        if (value < 4) return 'bg-rose-100 border-rose-200 text-rose-900';
+        if (value < 12) return 'bg-amber-100 border-amber-200 text-amber-900';
+        return 'bg-emerald-100 border-emerald-200 text-emerald-900';
+      case 'Загущение':
+        if (value > 1.3) return 'bg-rose-100 border-rose-200 text-rose-900';
+        if (value >= 1.0) return 'bg-amber-100 border-amber-200 text-amber-900';
+        return 'bg-emerald-100 border-emerald-200 text-emerald-900';
+      case 'Полнота':
+        if (value < 100) return 'bg-rose-100 border-rose-200 text-rose-900';
+        if (value <= 115) return 'bg-amber-100 border-amber-200 text-amber-900';
+        return 'bg-emerald-100 border-emerald-200 text-emerald-900';
+      default:
+        return 'bg-slate-50 border-slate-100 text-slate-700';
+    }
+  };
 
   const calculateCompleteness = (m: number, q: number, f600: number, yp: number, manualS?: number) => {
     const s = manualS !== undefined ? manualS : (f600 !== 0 ? yp / f600 : 0.0001);
@@ -143,29 +180,24 @@ const App: React.FC = () => {
   const generateChart = async () => {
     if (!results || !chartRef.current) return;
     await new Promise(r => setTimeout(r, 100));
-
     const xVar = CHART_VARIABLES[axisX];
     const yVar = CHART_VARIABLES[axisY];
     const xSteps = 20, ySteps = 20;
     const xData: number[] = [], yData: number[] = [], zData: number[][] = [];
-
     for (let i = 0; i <= xSteps; i++) xData.push(xVar.min + (xVar.max - xVar.min) * (i / xSteps));
     for (let j = 0; j <= ySteps; j++) yData.push(yVar.min + (yVar.max - yVar.min) * (j / ySteps));
-
     for (let j = 0; j <= ySteps; j++) {
       const row: number[] = [];
       for (let i = 0; i <= xSteps; i++) {
-        let current_m = results.m, current_q = results.q, current_f600 = parseFloat(labData.f600) || 60, current_yp = results.yp, current_s: number | undefined = undefined;
+        let current_m = results.m, current_q = results.q, current_f600 = parseFloat(labData.f600.toString()) || 60, current_yp = results.yp, current_s: number | undefined = undefined;
         if (axisX === 'm') current_m = xData[i]; else if (axisX === 'q') current_q = xData[i]; else if (axisX === 'f600') current_f600 = xData[i]; else if (axisX === 'yp') current_yp = xData[i]; else if (axisX === 'yp_f600') current_s = xData[i];
         if (axisY === 'm') current_m = yData[j]; else if (axisY === 'q') current_q = yData[j]; else if (axisY === 'f600') current_f600 = yData[j]; else if (axisY === 'yp') current_yp = yData[j]; else if (axisY === 'yp_f600') current_s = yData[j];
         row.push(calculateCompleteness(current_m, current_q, current_f600, current_yp, current_s));
       }
       zData.push(row);
     }
-
     const data = [{ z: zData, x: xData, y: yData, type: 'surface', colorscale: 'Viridis', colorbar: { title: 'Полнота' } }];
     const layout = { title: `Полнота от ${xVar.label} и ${yVar.label}`, autosize: true, margin: { l: 0, r: 0, b: 0, t: 50 }, scene: { xaxis: { title: xVar.label }, yaxis: { title: yVar.label }, zaxis: { title: 'Полнота', range: [30, 200] } } };
-
     try {
       await Plotly.newPlot(chartRef.current, data, layout, { responsive: true, displayModeBar: false });
       const img = await Plotly.toImage(chartRef.current, { format: 'png', width: 1000, height: 800 });
@@ -208,7 +240,20 @@ const App: React.FC = () => {
       return bytes;
     };
     const createCell = (text: string, bold = false) => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text, bold, size: 22 })], alignment: "center" })], verticalAlign: VerticalAlign.CENTER });
-    const reportRows = [ ["Содержание смектита (m)", `${results.m}%`], ["Обменная емкость (q)", String(results.q)], ["Влажность (w)", `${results.w}%`], ["PV (Пл. вязкость)", results.pv.toFixed(2)], ["YP (Пред. текучести)", results.yp.toFixed(2)], ["YP/PV", results.ypPvRatio.toFixed(2)], ["Критерий полноты", results.completeness.toFixed(2)] ];
+    const reportRows = [ 
+      ["Содержание смектита (m)", `${results.m}%`], 
+      ["Обменная емкость (q)", String(results.q)], 
+      ["Влажность (w)", `${results.w}%`], 
+      ["PV (Пл. вязкость)", results.pv.toFixed(2)], 
+      ["YP (Пред. текучести)", results.yp.toFixed(2)], 
+      ["YP/PV", results.ypPvRatio.toFixed(2)], 
+      ["Степень замещения (YP/f600)", results.s.toFixed(3)], 
+      ["Критерий полноты", results.completeness.toFixed(2)] 
+    ];
+    if (results.equivalent !== undefined) {
+      reportRows.push(["Эквивалент ПАВ, г/кг", results.equivalent.toFixed(3)]);
+    }
+
     const children: any[] = [
       new Paragraph({ alignment: "center", spacing: { after: 400 }, children: [new TextRun({ text: "ОТЧЕТ ОБ ИСПЫТАНИИ БЕНТОНИТА", bold: true, size: 32, color: "4f46e5" })] }),
       new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [ new TableRow({ children: [createCell("Параметр", true), createCell("Значение", true)] }), ...reportRows.map(row => new TableRow({ children: [createCell(row[0], false), createCell(row[1], false)] })) ] }),
@@ -219,7 +264,6 @@ const App: React.FC = () => {
     if (savedCharts.length > 0) {
       children.push(new Paragraph({ text: "", spacing: { before: 400 } }));
       savedCharts.forEach(chart => {
-        // Fix: Cast ImageRun options to any to bypass union type ambiguity in browser environment
         children.push(new Paragraph({ alignment: "center", children: [new ImageRun({ data: base64ToUint8Array(chart.imageData.split(',')[1]), transformation: { width: 500, height: 375 } } as any)] }));
       });
     }
@@ -236,15 +280,21 @@ const App: React.FC = () => {
       const s1 = pptx.addSlide({ masterName: 'MASTER' });
       s1.addText('Технический отчет по качеству бентонита', { x: 1, y: 2, w: 11, fontSize: 36, bold: true, color: style.primary });
       const s2 = pptx.addSlide({ masterName: 'MASTER' });
-      // Fix: Use object format for TableCell to satisfy stricter PptxGenJS types
-      s2.addTable([
+      
+      const tableData = [
         [{ text: 'Параметр' }, { text: 'Значение' }],
         [{ text: 'Смектит' }, { text: `${results.m}%` }],
         [{ text: 'КОЕ' }, { text: String(results.q) }],
         [{ text: 'PV' }, { text: results.pv.toFixed(2) }],
         [{ text: 'YP' }, { text: results.yp.toFixed(2) }],
+        [{ text: 'Замещение' }, { text: results.s.toFixed(3) }],
         [{ text: 'Полнота' }, { text: results.completeness.toFixed(2) }]
-      ], { x: 0.5, y: 1.5, w: 12, border: { pt: 1, color: style.secondary }, fill: { color: 'ffffff' } });
+      ];
+      if (results.equivalent !== undefined) {
+        tableData.push([{ text: 'Эквивалент ПАВ' }, { text: results.equivalent.toFixed(3) }]);
+      }
+
+      s2.addTable(tableData, { x: 0.5, y: 1.5, w: 12, border: { pt: 1, color: style.secondary }, fill: { color: 'ffffff' } });
       savedCharts.forEach(chart => { const sc = pptx.addSlide({ masterName: 'MASTER' }); sc.addImage({ data: chart.imageData, x: 1, y: 1, w: 11, h: 5.5 }); });
       await pptx.writeFile({ fileName: 'Geolab_Analysis.pptx' });
     } finally { setIsGeneratingDoc(false); }
@@ -260,9 +310,8 @@ const App: React.FC = () => {
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const ctxIn = new AudioContext({ sampleRate: 16000 });
-      const ctxOut = new AudioContext({ sampleRate: 24000 });
-      
+      const ctxIn = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      const ctxOut = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         config: { 
@@ -296,33 +345,33 @@ const App: React.FC = () => {
               nextStartTimeRef.current += buffer.duration;
               sourcesRef.current.add(source);
             }
-
             if (msg.serverContent?.interrupted) {
-              for (const source of sourcesRef.current.values()) {
-                try { source.stop(); } catch (e) {}
-              }
+              for (const source of sourcesRef.current.values()) { try { source.stop(); } catch (e) {} }
               sourcesRef.current.clear();
               nextStartTimeRef.current = 0;
             }
-
             if (msg.serverContent?.inputTranscription) {
               const val = parseSpokenNumber(msg.serverContent.inputTranscription.text || '');
               if (val !== null) setLabData(prev => ({ ...prev, [LAB_ORDER[currentStep]]: val.toString() }));
             }
           },
-          onclose: () => {
-            setIsLiveActive(false);
-            nextStartTimeRef.current = 0;
-          },
-          onerror: () => {
-            setIsLiveActive(false);
-            nextStartTimeRef.current = 0;
-          }
+          onclose: () => { setIsLiveActive(false); nextStartTimeRef.current = 0; },
+          onerror: () => { setIsLiveActive(false); nextStartTimeRef.current = 0; }
         }
       });
       sessionRef.current = await sessionPromise;
     } catch (e) { setIsLiveActive(false); }
   };
+
+  const gridResults = results ? [
+    { label: 'Изотропия', value: results.isotropy, type: 'Изотропия', formatted: results.isotropy.toFixed(4) },
+    { label: 'Генерация', value: results.generation, type: 'Генерация', formatted: results.generation.toFixed(2) },
+    { label: 'Загущение', value: results.thickening, type: 'Загущение', formatted: results.thickening.toFixed(2) },
+    { label: 'YP/PV', value: results.ypPvRatio, type: 'YP/PV', formatted: results.ypPvRatio.toFixed(2) },
+    { label: 'Степень замещения', value: results.s, type: 'Замещение', formatted: results.s.toFixed(3) }
+  ] : [];
+
+  const isEquivStep = currentStep >= 5;
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-10 text-slate-900 flex flex-col items-center">
@@ -345,7 +394,7 @@ const App: React.FC = () => {
                 reader.onloadend = async () => {
                   try {
                     const ext = await extractLabDataFromImage((reader.result as string).split(',')[1]);
-                    setLabData(prev => ({ ...prev, ...ext }));
+                    setLabData(prev => ({ ...prev, ...ext as any }));
                   } finally { setIsUploading(false); }
                 };
                 reader.readAsDataURL(file);
@@ -354,24 +403,43 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <div className="grid grid-cols-5 gap-3">
-          {LAB_ORDER.map((key, index) => (
-            <button key={key} onClick={() => { setCurrentStep(index); setShowResults(false); }}
-              className={`p-4 rounded-[1.5rem] border-2 text-center transition-all ${currentStep === index ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl scale-105' : labData[key] ? 'bg-white border-emerald-100 text-slate-800' : 'bg-white border-slate-200 opacity-60'}`}>
-              <div className={`text-[8px] font-black uppercase mb-1 truncate ${currentStep === index ? 'text-indigo-100' : 'text-slate-400'}`}>{LAB_LABELS[key]}</div>
-              <div className="text-xl font-mono font-black">{labData[key] || '0'}</div>
-            </button>
-          ))}
+        <div className="flex flex-col gap-4">
+           <div className="grid grid-cols-5 gap-3">
+            {LAB_ORDER.slice(0, 5).map((key, index) => (
+              <button key={key} onClick={() => { setCurrentStep(index); setShowResults(false); }}
+                className={`p-4 rounded-[1.5rem] border-2 text-center transition-all ${currentStep === index ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl scale-105' : labData[key] ? 'bg-white border-emerald-100 text-slate-800' : 'bg-white border-slate-200 opacity-60'}`}>
+                <div className={`text-[8px] font-black uppercase mb-1 truncate ${currentStep === index ? 'text-indigo-100' : 'text-slate-400'}`}>{LAB_LABELS[key]}</div>
+                <div className="text-xl font-mono font-black">{labData[key] || '0'}</div>
+              </button>
+            ))}
+          </div>
+          <div className="space-y-2">
+            <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Расчет эквивалента</h4>
+            <div className="grid grid-cols-2 gap-3">
+              {LAB_ORDER.slice(5).map((key, index) => {
+                const stepIdx = index + 5;
+                return (
+                  <button key={key} onClick={() => { setCurrentStep(stepIdx); setShowResults(false); }}
+                    className={`p-4 rounded-[1.5rem] border-2 text-center transition-all ${currentStep === stepIdx ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl scale-105' : labData[key] ? 'bg-white border-emerald-100 text-slate-800' : 'bg-white border-slate-200 opacity-60'}`}>
+                    <div className={`text-[8px] font-black uppercase mb-1 truncate ${currentStep === stepIdx ? 'text-indigo-100' : 'text-slate-400'}`}>{LAB_LABELS[key]}</div>
+                    <div className="text-xl font-mono font-black">{labData[key] || '0'}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         {!showResults ? (
           <div className="bg-white p-12 rounded-[2.5rem] shadow-2xl border border-slate-100 text-center relative overflow-hidden animate-slide-up">
-            <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] mb-10">{LAB_LABELS[LAB_ORDER[currentStep]]}</h2>
+            <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] mb-10">
+               {isEquivStep ? 'Расчет эквивалента: ' : ''}{LAB_LABELS[LAB_ORDER[currentStep]]}
+            </h2>
             <input type="text" inputMode="decimal" className="w-full text-center text-7xl font-mono font-black py-6 bg-slate-50 border-b-8 border-slate-100 focus:border-indigo-600 outline-none rounded-3xl transition-all"
               value={labData[LAB_ORDER[currentStep]]} onChange={(e) => setLabData(p => ({ ...p, [LAB_ORDER[currentStep]]: e.target.value }))}
-              onKeyDown={(e) => e.key === 'Enter' && (currentStep < 4 ? setCurrentStep(currentStep + 1) : setShowResults(true))} autoFocus />
-            <button onClick={() => (currentStep < 4 ? setCurrentStep(currentStep + 1) : setShowResults(true))} className="mt-12 bg-indigo-600 text-white px-16 py-5 rounded-3xl font-black uppercase text-sm tracking-widest shadow-2xl hover:bg-indigo-700 active:scale-95 transition-all">
-              {currentStep === 4 ? 'Рассчитать' : 'Продолжить'}
+              onKeyDown={(e) => e.key === 'Enter' && (currentStep < 6 ? setCurrentStep(currentStep + 1) : setShowResults(true))} autoFocus />
+            <button onClick={() => (currentStep < 6 ? setCurrentStep(currentStep + 1) : setShowResults(true))} className="mt-12 bg-indigo-600 text-white px-16 py-5 rounded-3xl font-black uppercase text-sm tracking-widest shadow-2xl hover:bg-indigo-700 active:scale-95 transition-all">
+              {currentStep === 6 ? 'Рассчитать' : 'Продолжить'}
             </button>
           </div>
         ) : (
@@ -388,15 +456,31 @@ const App: React.FC = () => {
               <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-10">
                 <div className="space-y-3">
                   {LAB_ORDER.map(k => (
-                    <div key={k} className="flex justify-between border-b border-slate-50 pb-2 text-sm"><span className="text-slate-500 font-bold">{LAB_LABELS[k]}</span><span className="font-mono font-black">{labData[k]}</span></div>
+                    <div key={k} className="flex justify-between border-b border-slate-50 pb-2 text-sm">
+                      <span className="text-slate-500 font-bold">{LAB_LABELS[k]}</span>
+                      <span className="font-mono font-black">{labData[k] || '-'}</span>
+                    </div>
                   ))}
-                  {results && <div className="bg-indigo-50 p-4 rounded-2xl mt-4 flex justify-between items-center"><span className="text-[10px] font-black text-indigo-600 uppercase">Полнота</span><span className="text-xl font-mono font-black text-indigo-700">{results.completeness.toFixed(2)}</span></div>}
+                  <div className="grid grid-cols-1 gap-4 mt-6">
+                    {results?.equivalent !== undefined && (
+                      <div className="p-5 rounded-2xl bg-sky-100 border-2 border-sky-200 text-sky-900 flex justify-between items-center shadow-sm">
+                        <span className="text-[10px] font-black uppercase">Эквивалент ПАВ, г/кг</span>
+                        <span className="text-2xl font-mono font-black">{results.equivalent.toFixed(3)}</span>
+                      </div>
+                    )}
+                    {results && (
+                      <div className={`p-5 rounded-2xl flex justify-between items-center border-2 transition-colors ${getCriterionStyle('Полнота', results.completeness)}`}>
+                        <span className="text-[10px] font-black uppercase">Критерий полноты</span>
+                        <span className="text-2xl font-mono font-black">{results.completeness.toFixed(2)}</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
-                   {results && [{ l: 'Изотропия', v: results.isotropy.toFixed(4) }, { l: 'Генерация', v: results.generation.toFixed(2) }, { l: 'Загущение', v: results.thickening.toFixed(2) }, { l: 'YP/PV', v: results.ypPvRatio.toFixed(2) }].map(c => (
-                     <div key={c.l} className="bg-slate-50 p-5 rounded-3xl border border-slate-100 flex flex-col items-center justify-center">
-                       <span className="text-[9px] font-black text-slate-400 uppercase mb-2">{c.l}</span>
-                       <span className="text-xl font-mono font-black text-indigo-700">{c.v}</span>
+                   {gridResults.map(c => (
+                     <div key={c.label} className={`p-5 rounded-3xl border-2 flex flex-col items-center justify-center transition-colors ${getCriterionStyle(c.type, c.value)}`}>
+                       <span className="text-[9px] font-black uppercase mb-2 text-center leading-tight opacity-70">{c.label}</span>
+                       <span className="text-xl font-mono font-black">{c.formatted}</span>
                      </div>
                    ))}
                 </div>
@@ -453,7 +537,7 @@ const App: React.FC = () => {
 
       {showStylePicker && (
         <div className="fixed inset-0 bg-slate-900/70 flex items-center justify-center z-[80] p-4">
-          <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl">
+          <div className="bg-white w-full max-sm:w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl">
             <h5 className="text-lg font-black uppercase mb-6 text-center">Стиль презентации</h5>
             <div className="grid gap-3">
               {PPT_STYLES.map(s => (

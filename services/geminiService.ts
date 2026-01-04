@@ -2,6 +2,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { LabData, CalculationResult, Conclusion } from "../types";
 
+// Extract laboratory data from an image of a lab report
 export async function extractLabDataFromImage(base64Image: string): Promise<Partial<LabData>> {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
@@ -19,23 +20,25 @@ export async function extractLabDataFromImage(base64Image: string): Promise<Part
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            m: { type: Type.NUMBER, nullable: true },
-            q: { type: Type.NUMBER, nullable: true },
-            w: { type: Type.NUMBER, nullable: true },
-            f300: { type: Type.NUMBER, nullable: true },
-            f600: { type: Type.NUMBER, nullable: true }
+            m: { type: Type.NUMBER },
+            q: { type: Type.NUMBER },
+            w: { type: Type.NUMBER },
+            f300: { type: Type.NUMBER },
+            f600: { type: Type.NUMBER }
           }
         }
       }
     });
 
-    return JSON.parse(response.text || '{}');
+    // Use .text property directly and trim it
+    return JSON.parse(response.text?.trim() || '{}');
   } catch (e) {
     console.error("Failed to extract lab data from image:", e);
     return {};
   }
 }
 
+// Get expert conclusions based on calculated lab results
 export async function getBentoniteConclusions(results: CalculationResult): Promise<Conclusion[]> {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
@@ -63,7 +66,8 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      // Using pro model for complex expert reasoning task
+      model: 'gemini-3-pro-preview',
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -87,7 +91,8 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
       }
     });
 
-    const data = JSON.parse(response.text || '{"conclusions":[]}');
+    // Use .text property directly and trim it
+    const data = JSON.parse(response.text?.trim() || '{"conclusions":[]}');
     return data.conclusions || [];
   } catch (e) {
     console.error("Failed to get conclusions from Gemini:", e);
