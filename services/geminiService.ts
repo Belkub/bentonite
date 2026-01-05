@@ -66,8 +66,8 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
 
   try {
     const response = await ai.models.generateContent({
-      // Using pro model for complex expert reasoning task
-      model: 'gemini-3-pro-preview',
+      // Using flash model for broader availability across deployment environments
+      model: 'gemini-3-flash-preview',
       contents: prompt,
       config: {
         responseMimeType: "application/json",

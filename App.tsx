@@ -209,16 +209,32 @@ const App: React.FC = () => {
   const handleGetConclusions = async () => {
     if (!results) { setAnalysisError("Введите данные."); return; }
     setAnalysisError(null); setIsAnalyzing(true);
+    
+    const aistudio = (window as any).aistudio;
+
     try {
+      // Prompt for key if it seems missing and environment supports key selection
+      if (!process.env.API_KEY && aistudio && typeof aistudio.openSelectKey === 'function') {
+        await aistudio.openSelectKey();
+      }
+
       const cons = await getBentoniteConclusions(results);
       setConclusions(cons);
     } catch (err: any) {
-      console.error(err);
-      const aistudio = (window as any).aistudio;
-      if (err.message?.includes("Requested entity was not found") && aistudio) {
+      console.error("Gemini Error:", err);
+      
+      const errorMessage = err.message || "";
+      
+      // Auto-trigger key selection if model or auth fails
+      if ((errorMessage.includes("Requested entity was not found") || 
+           errorMessage.includes("API key not valid") || 
+           errorMessage.includes("403") || 
+           errorMessage.includes("401")) && aistudio) {
         await aistudio.openSelectKey();
+        setAnalysisError("Пожалуйста, выберите корректный API ключ и попробуйте снова.");
+      } else {
+        setAnalysisError("Ошибка связи с ИИ. Убедитесь, что API ключ настроен в Vercel или выбран в диалоге.");
       }
-      setAnalysisError("Ошибка связи с ИИ. Проверьте API_KEY.");
     } finally { setIsAnalyzing(false); }
   };
 
