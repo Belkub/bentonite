@@ -79,19 +79,19 @@ const App: React.FC = () => {
   const results = useMemo((): CalculationResult | null => {
     const { m, q, w, f300, f600, s_equiv, mm } = labData;
     
-    const parse = (val: string | number | null | undefined): number => {
+    const parseNum = (val: string | number | null | undefined): number => {
       if (val === null || val === undefined) return NaN;
       const cleaned = val.toString().replace(',', '.').trim();
       return cleaned === '' ? NaN : parseFloat(cleaned);
     };
     
-    const m_val = parse(m);
-    const q_val = parse(q);
-    const w_val = parse(w);
-    const f3_val = parse(f300);
-    const f6_val = parse(f600);
-    const mm_val = parse(mm);
-    const s_equiv_val = parse(s_equiv);
+    const m_val = parseNum(m);
+    const q_val = parseNum(q);
+    const w_val = parseNum(w);
+    const f3_val = parseNum(f300);
+    const f6_val = parseNum(f600);
+    const mm_val = parseNum(mm);
+    const s_equiv_val = parseNum(s_equiv);
     
     // Основная проверка валидности базовых данных
     const isValidBase = !isNaN(m_val) && !isNaN(q_val) && !isNaN(w_val) && !isNaN(f3_val) && !isNaN(f6_val);
@@ -99,37 +99,31 @@ const App: React.FC = () => {
 
     // Расчеты реологии
     const pv = f6_val - f3_val;
-    const yp = f3_val - pv; // Bingham Plastic: YP = 2*f300 - f600
+    const yp = f3_val - pv; 
     const f = f6_val / 2;
     const poe = q_val / (1 - 0.01 * w_val);
     
     const ypPvRatio = pv !== 0 ? yp / pv : 0;
     const s_ratio = f6_val !== 0 ? yp / f6_val : 0;
     
-    // ФОРМУЛЫ ИЗ EXCEL (строго по спецификации пользователя)
-    
-    // Изотропия: (0,5-СТЕПЕНЬ(((YP/f600)-0,5);2)) * m * m * 0.01 * 0.01
+    // ФОРМУЛЫ ИЗ EXCEL
     const isotropy = (f6_val !== 0) 
       ? (0.5 - Math.pow((s_ratio - 0.5), 2)) * m_val * m_val * 0.0001 
       : 0;
       
-    // Генерация: f600 * (1 - (YP/f600)) * m / q
     const generation = (q_val !== 0 && f6_val !== 0) 
       ? f6_val * (1 - s_ratio) * m_val / q_val 
       : 0;
       
-    // Загущение: f600 / (0.01 * 0.01 * m * m * q)
     const thickening = (q_val !== 0 && m_val !== 0) 
       ? f6_val / (0.0001 * m_val * m_val * q_val) 
       : 0;
       
-    // Полнота: q * 0,01 * m * 0,01 * m * LOG(f600*0,001) * LOG(f600*0,001) / (YP/f600)
     const logVal = (f6_val > 0) ? Math.log10(f6_val * 0.001) : 0;
     const completeness = (s_ratio !== 0) 
       ? (q_val * 0.0001 * m_val * m_val * Math.pow(logVal, 2)) / s_ratio 
       : 0;
     
-    // Эквивалент ПАВ
     let equivalent: number | undefined = undefined;
     if (!isNaN(s_equiv_val) && !isNaN(mm_val)) {
       equivalent = (q_val / (1 - w_val * 0.01)) * 10 * 0.001 * mm_val * (1 - s_equiv_val * 0.01);
@@ -173,7 +167,6 @@ const App: React.FC = () => {
     const s = manualS !== undefined ? manualS : (f600 !== 0 ? yp / f600 : 0.0001);
     const logArg = f600 * 0.001;
     const logVal = logArg > 0 ? Math.log10(logArg) : 0;
-    // Синхронизированная формула полноты
     let res = (s !== 0) ? (q * 0.0001 * m * m * Math.pow(logVal, 2)) / s : 0;
     if (res < 30) res = 30;
     if (res > 200) res = 200;
@@ -281,7 +274,10 @@ const App: React.FC = () => {
       });
     }
     const blob = await Packer.toBlob(new Document({ sections: [{ children }] }));
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'geolab_report.docx'; a.click();
+    const a = document.createElement('a'); 
+    a.href = URL.createObjectURL(blob); 
+    a.download = 'geolab_report.docx'; 
+    a.click();
   };
 
   const createPPTX = async (style: PPTStyle) => {
@@ -319,7 +315,7 @@ const App: React.FC = () => {
 2. Формула генерации: f600 * (1 - YP/f600) * m / q. Приемлемо > 8.5.
 3. Формула загущения: f600 / (0,01 * 0,01 * m * m * q). Норма 1.0 - 1.3.
 4. Формула полноты: (q * 0,01 * m * 0,01 * m * LOG(f600*0,001)^2) / (YP/f600). Приемлемо 100-115.
-Будьте профессиональны, подтверждайте диктуемые числа.`;
+Будьте профессиональны, подтверждайте диктуемые числа, включая Содержание смектита и Мол массу ПАВ.`;
 
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',

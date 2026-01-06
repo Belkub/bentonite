@@ -47,7 +47,7 @@ export const LAB_LABELS: Record<LabKey, string> = {
   f300: 'Фи 300',
   f600: 'Фи 600',
   s_equiv: 'Влага глины, %',
-  mm: 'ММ ПАВ, моль'
+  mm: 'Мол масса ПАВ, г/моль'
 };
 
 export const LAB_ORDER: LabKey[] = ['m', 'q', 'w', 'f300', 'f600', 's_equiv', 'mm'];
