@@ -15,9 +15,6 @@ import PptxGenJS from 'pptxgenjs';
 
 declare var Plotly: any;
 
-// The environment already provides aistudio on the global window object.
-// We use type casting to (window as any) to access its members to avoid redeclaring conflicts.
-
 type PPTStyle = {
   id: string;
   name: string;
@@ -81,9 +78,11 @@ const App: React.FC = () => {
 
   const results = useMemo((): CalculationResult | null => {
     const { m, q, w, f300, f600, s_equiv, mm } = labData;
-    const parse = (val: string | number) => {
-        const cleaned = (val ?? '').toString().replace(',', '.').trim();
-        return cleaned === '' ? NaN : parseFloat(cleaned);
+    
+    const parse = (val: string | number | null | undefined): number => {
+      if (val === null || val === undefined) return NaN;
+      const cleaned = val.toString().replace(',', '.').trim();
+      return cleaned === '' ? NaN : parseFloat(cleaned);
     };
     
     const m_val = parse(m);
@@ -92,44 +91,46 @@ const App: React.FC = () => {
     const f3_val = parse(f300);
     const f6_val = parse(f600);
     const mm_val = parse(mm);
+    const s_equiv_val = parse(s_equiv);
     
-    const isValid = [m_val, q_val, w_val, f3_val, f6_val].every(v => !isNaN(v));
-    if (!isValid) return null;
+    // Основная проверка валидности базовых данных
+    const isValidBase = !isNaN(m_val) && !isNaN(q_val) && !isNaN(w_val) && !isNaN(f3_val) && !isNaN(f6_val);
+    if (!isValidBase) return null;
 
+    // Расчеты реологии
     const pv = f6_val - f3_val;
-    const yp = f3_val - pv;
+    const yp = f3_val - pv; // Bingham Plastic: YP = 2*f300 - f600
     const f = f6_val / 2;
     const poe = q_val / (1 - 0.01 * w_val);
+    
     const ypPvRatio = pv !== 0 ? yp / pv : 0;
     const s_ratio = f6_val !== 0 ? yp / f6_val : 0;
     
-    // Изотропия: (0,5 - (YP/f600 - 0,5)^2) * MM * MM * 0,01 * 0,01
-    const mm_effective = isNaN(mm_val) ? 1.0 : mm_val;
+    // ФОРМУЛЫ ИЗ EXCEL (строго по спецификации пользователя)
+    
+    // Изотропия: (0,5-СТЕПЕНЬ(((YP/f600)-0,5);2)) * m * m * 0.01 * 0.01
     const isotropy = (f6_val !== 0) 
-      ? (0.5 - Math.pow(((yp / f6_val) - 0.5), 2)) * mm_effective * mm_effective * 0.01 * 0.01 
+      ? (0.5 - Math.pow((s_ratio - 0.5), 2)) * m_val * m_val * 0.0001 
       : 0;
       
-    // Генерация: f600 * (1 - YP/f600) * MM / KOE
+    // Генерация: f600 * (1 - (YP/f600)) * m / q
     const generation = (q_val !== 0 && f6_val !== 0) 
-      ? f6_val * (1 - (yp / f6_val)) * mm_effective / q_val 
+      ? f6_val * (1 - s_ratio) * m_val / q_val 
       : 0;
       
-    // Загущение: f600 / (KOE * MM^2 * 0.01^2)
-    const thickening = (q_val !== 0 && f6_val !== 0) 
-      ? f6_val / (q_val * mm_effective * mm_effective * 0.01 * 0.01) 
+    // Загущение: f600 / (0.01 * 0.01 * m * m * q)
+    const thickening = (q_val !== 0 && m_val !== 0) 
+      ? f6_val / (0.0001 * m_val * m_val * q_val) 
       : 0;
       
-    const logArg = f6_val !== 0 ? f6_val * 0.001 : 0.06;
-    const logVal = logArg > 0 ? Math.log10(logArg) : 0;
-    
-    // Полнота: (KOE * 0.01 * MM * 0.01 * MM * LOG(f600*0.001)^2) / (YP/f600)
+    // Полнота: q * 0,01 * m * 0,01 * m * LOG(f600*0,001) * LOG(f600*0,001) / (YP/f600)
+    const logVal = (f6_val > 0) ? Math.log10(f6_val * 0.001) : 0;
     const completeness = (s_ratio !== 0) 
-      ? (q_val * 0.01 * mm_effective * 0.01 * mm_effective * Math.pow(logVal, 2)) / s_ratio 
+      ? (q_val * 0.0001 * m_val * m_val * Math.pow(logVal, 2)) / s_ratio 
       : 0;
     
-    // Equivalent Calculation
+    // Эквивалент ПАВ
     let equivalent: number | undefined = undefined;
-    const s_equiv_val = parse(s_equiv);
     if (!isNaN(s_equiv_val) && !isNaN(mm_val)) {
       equivalent = (q_val / (1 - w_val * 0.01)) * 10 * 0.001 * mm_val * (1 - s_equiv_val * 0.01);
     }
@@ -172,8 +173,8 @@ const App: React.FC = () => {
     const s = manualS !== undefined ? manualS : (f600 !== 0 ? yp / f600 : 0.0001);
     const logArg = f600 * 0.001;
     const logVal = logArg > 0 ? Math.log10(logArg) : 0;
-    const mm_val = parseFloat(labData.mm) || 1.0;
-    let res = (s !== 0) ? (q * 0.01 * mm_val * 0.01 * mm_val * Math.pow(logVal, 2)) / s : 0;
+    // Синхронизированная формула полноты
+    let res = (s !== 0) ? (q * 0.0001 * m * m * Math.pow(logVal, 2)) / s : 0;
     if (res < 30) res = 30;
     if (res > 200) res = 200;
     return res;
@@ -191,7 +192,7 @@ const App: React.FC = () => {
     for (let j = 0; j <= ySteps; j++) {
       const row: number[] = [];
       for (let i = 0; i <= xSteps; i++) {
-        let current_m = results.m, current_q = results.q, current_f600 = parseFloat(labData.f600.toString()) || 60, current_yp = results.yp, current_s: number | undefined = undefined;
+        let current_m = results.m, current_q = results.q, current_f600 = results.f * 2, current_yp = results.yp, current_s: number | undefined = undefined;
         if (axisX === 'm') current_m = xData[i]; else if (axisX === 'q') current_q = xData[i]; else if (axisX === 'f600') current_f600 = xData[i]; else if (axisX === 'yp') current_yp = xData[i]; else if (axisX === 'yp_f600') current_s = xData[i];
         if (axisY === 'm') current_m = yData[j]; else if (axisY === 'q') current_q = yData[j]; else if (axisY === 'f600') current_f600 = yData[j]; else if (axisY === 'yp') current_yp = yData[j]; else if (axisY === 'yp_f600') current_s = yData[j];
         row.push(calculateCompleteness(current_m, current_q, current_f600, current_yp, current_s));
@@ -314,11 +315,11 @@ const App: React.FC = () => {
       const ctxOut = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       
       const systemInstruction = `Вы — эксперт GeoLab Pro по реологии бентонита. Помогайте анализировать результаты, опираясь на научные данные:
-1. Реология: Пластическая вязкость (PV) — скорость разрушения структуры. Чем крупнее слоистый пакет, тем выше PV и ниже YP.
-2. YP/PV (хрупкость): > 6 — бентонит активирован содой, для органомодификации сомнителен. 1.5 - 3 — класс 'Drilling grade'.
-3. Изотропия: Приемлемо >= 0.24. Генерация: Приемлемо > 8.5. Загущение: Норма 1.0 - 1.3. Полнота: Приемлемо 100-115, высокое качество > 115.
-4. PV ~ КОЕ(Ca)/КОЕ(Na). YP ~ ММ * (КОЕ/КОЕo).
-Текущие данные пользователя: ${results ? `PV:${results.pv.toFixed(2)}, YP:${results.yp.toFixed(2)}, Изотропия:${results.isotropy.toFixed(4)}, Полнота:${results.completeness.toFixed(2)}` : 'Данные не введены.'}`;
+1. Формула изотропии: (0,5 - ((YP/f600)-0,5)^2) * m * m * 0,01 * 0,01. Приемлемо >= 0.24.
+2. Формула генерации: f600 * (1 - YP/f600) * m / q. Приемлемо > 8.5.
+3. Формула загущения: f600 / (0,01 * 0,01 * m * m * q). Норма 1.0 - 1.3.
+4. Формула полноты: (q * 0,01 * m * 0,01 * m * LOG(f600*0,001)^2) / (YP/f600). Приемлемо 100-115.
+Будьте профессиональны, подтверждайте диктуемые числа.`;
 
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
