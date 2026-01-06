@@ -92,6 +92,7 @@ const App: React.FC = () => {
     const w_val = parse(w);
     const f3_val = parse(f300);
     const f6_val = parse(f600);
+    const mm_val = parse(mm);
     
     const isValid = [m_val, q_val, w_val, f3_val, f6_val].every(v => !isNaN(v));
     if (!isValid) return null;
@@ -103,23 +104,33 @@ const App: React.FC = () => {
     const ypPvRatio = pv !== 0 ? yp / pv : 0;
     const s_ratio = f6_val !== 0 ? yp / f6_val : 0;
     
+    // Изотропия: (0,5 - (YP/f600 - 0,5)^2) * MM * MM * 0,01 * 0,01
+    const mm_effective = isNaN(mm_val) ? 1.0 : mm_val;
     const isotropy = (f6_val !== 0) 
-      ? (0.5 - Math.pow(((yp / f6_val) - 0.5), 2)) * m_val * m_val * 0.01 * 0.01 
+      ? (0.5 - Math.pow(((yp / f6_val) - 0.5), 2)) * mm_effective * mm_effective * 0.01 * 0.01 
       : 0;
-    const generation = (q_val !== 0 && f6_val !== 0) 
-      ? f6_val * (1 - (yp / f6_val)) * m_val / q_val 
+      
+    // Генерация: f600 * (1 - YP/f600) * MM / KOE
+    const generation = (q_val !== 0 && f600 !== 0) 
+      ? parseFloat(f600.toString()) * (1 - (yp / parseFloat(f600.toString()))) * mm_effective / q_val 
       : 0;
-    const thickening = (m_val !== 0 && q_val !== 0 && f6_val !== 0) ? f6_val / (0.01 * 0.01 * m_val * m_val * q_val) : 0;
+      
+    // Загущение: f600 / (KOE * MM^2 * 0.01^2)
+    const thickening = (q_val !== 0 && f6_val !== 0) 
+      ? parseFloat(f600.toString()) / (q_val * mm_effective * mm_effective * 0.01 * 0.01) 
+      : 0;
+      
     const logArg = f6_val !== 0 ? f6_val * 0.001 : 0.06;
     const logVal = logArg > 0 ? Math.log10(logArg) : 0;
+    
+    // Полнота: (KOE * 0.01 * MM * 0.01 * MM * LOG(f600*0.001)^2) / (YP/f600)
     const completeness = (s_ratio !== 0) 
-      ? (q_val * 0.01 * m_val * 0.01 * m_val * Math.pow(logVal, 2)) / s_ratio 
+      ? (q_val * 0.01 * mm_effective * 0.01 * mm_effective * Math.pow(logVal, 2)) / s_ratio 
       : 0;
     
     // Equivalent Calculation
     let equivalent: number | undefined = undefined;
     const s_equiv_val = parse(s_equiv);
-    const mm_val = parse(mm);
     if (!isNaN(s_equiv_val) && !isNaN(mm_val)) {
       equivalent = (q_val / (1 - w_val * 0.01)) * 10 * 0.001 * mm_val * (1 - s_equiv_val * 0.01);
     }
@@ -143,7 +154,7 @@ const App: React.FC = () => {
         return 'bg-emerald-100 border-emerald-200 text-emerald-900';
       case 'Генерация':
         if (value < 4) return 'bg-rose-100 border-rose-200 text-rose-900';
-        if (value < 12) return 'bg-amber-100 border-amber-200 text-amber-900';
+        if (value < 8.5) return 'bg-amber-100 border-amber-200 text-amber-900';
         return 'bg-emerald-100 border-emerald-200 text-emerald-900';
       case 'Загущение':
         if (value > 1.3) return 'bg-rose-100 border-rose-200 text-rose-900';
@@ -162,7 +173,9 @@ const App: React.FC = () => {
     const s = manualS !== undefined ? manualS : (f600 !== 0 ? yp / f600 : 0.0001);
     const logArg = f600 * 0.001;
     const logVal = logArg > 0 ? Math.log10(logArg) : 0;
-    let res = (s !== 0) ? (q * 0.01 * m * 0.01 * m * Math.pow(logVal, 2)) / s : 0;
+    // Используем упрощенную формулу для графика (MM=1 если не задано)
+    const mm_val = parseFloat(labData.mm) || 1.0;
+    let res = (s !== 0) ? (q * 0.01 * mm_val * 0.01 * mm_val * Math.pow(logVal, 2)) / s : 0;
     if (res < 30) res = 30;
     if (res > 200) res = 200;
     return res;
@@ -213,19 +226,14 @@ const App: React.FC = () => {
     const aistudio = (window as any).aistudio;
 
     try {
-      // Prompt for key if it seems missing and environment supports key selection
       if (!process.env.API_KEY && aistudio && typeof aistudio.openSelectKey === 'function') {
         await aistudio.openSelectKey();
       }
-
       const cons = await getBentoniteConclusions(results);
       setConclusions(cons);
     } catch (err: any) {
       console.error("Gemini Error:", err);
-      
       const errorMessage = err.message || "";
-      
-      // Auto-trigger key selection if model or auth fails
       if ((errorMessage.includes("Requested entity was not found") || 
            errorMessage.includes("API key not valid") || 
            errorMessage.includes("403") || 
@@ -320,12 +328,35 @@ const App: React.FC = () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const ctxIn = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       const ctxOut = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      
+      // Формируем системную инструкцию на базе документов
+      const systemInstruction = `Вы — эксперт GeoLab Pro по реологии бентонита. Ваша задача — помогать пользователю анализировать результаты лабораторных тестов, опираясь на научные закономерности:
+1. Реология: Пластическая вязкость (PV) — это скорость разрушения структуры. Чем крупнее слоистый пакет, тем выше PV и ниже YP.
+2. Соотношение YP/PV (хрупкость): Если > 6, бентонит активирован содой, пригодность для органомодификации сомнительна. Если 1.5 - 3, бентонит класса 'Drilling grade'.
+3. Работа когезии (2*PV) vs Работа адгезии (YP): У природного бентонита они близки (YP ≈ 2*PV). Анизотропия (YP/PV > 6) говорит об активации.
+4. Основные критерии GeoLab:
+   - Изотропия: Приемлемо >= 0.24.
+   - Генерация: Приемлемо > 8.5.
+   - Загущение: Норма 1.0 - 1.3 (ниже 1 — хорошо).
+   - Полнота: Приемлемо 100-115, высокое качество > 115.
+   
+Текущие данные пользователя (если есть): 
+${results ? `
+- PV: ${results.pv.toFixed(2)}, YP: ${results.yp.toFixed(2)}, YP/PV: ${results.ypPvRatio.toFixed(2)}
+- Изотропия: ${results.isotropy.toFixed(4)}
+- Генерация: ${results.generation.toFixed(2)}
+- Загущение: ${results.thickening.toFixed(2)}
+- Полнота: ${results.completeness.toFixed(2)}
+` : 'Данные пока не введены.'}
+
+Будьте профессиональны, используйте термины "пакетные агрегаты", "обменная емкость", "ММ". Если пользователь диктует числа, подтверждайте их.`;
+
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         config: { 
           responseModalities: [Modality.AUDIO], 
           inputAudioTranscription: {}, 
-          systemInstruction: 'Вы эксперт GeoLab. Помогайте анализировать показатели бентонита.' 
+          systemInstruction: systemInstruction 
         },
         callbacks: {
           onopen: () => {
@@ -387,7 +418,10 @@ const App: React.FC = () => {
         <header className="flex justify-between items-center bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100">
           <div className="flex items-center gap-3">
             <div className={`w-3 h-3 rounded-full ${isLiveActive ? 'bg-red-500 animate-pulse' : 'bg-indigo-600'}`}></div>
-            <h1 className="text-2xl font-black tracking-tighter">GeoLab<span className="text-indigo-600">Pro</span></h1>
+            <div className="flex items-baseline gap-2">
+              <h1 className="text-2xl font-black tracking-tighter">GeoLab<span className="text-indigo-600">Pro</span></h1>
+              <span className="text-red-600 text-[10px] font-black uppercase tracking-widest hidden sm:inline">Bentonite Co</span>
+            </div>
           </div>
           <div className="flex gap-2">
             <button onClick={startLiveSession} className={`px-5 py-2.5 rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-md transition-all ${isLiveActive ? 'bg-red-500 text-white' : 'bg-indigo-600 text-white'}`}>
