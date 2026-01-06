@@ -64,7 +64,6 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const checkKey = async () => {
-      // Cast window to any to avoid property conflict errors with pre-configured environment objects
       const aistudio = (window as any).aistudio;
       if (aistudio && typeof aistudio.hasSelectedApiKey === 'function') {
         try {
@@ -111,13 +110,13 @@ const App: React.FC = () => {
       : 0;
       
     // Генерация: f600 * (1 - YP/f600) * MM / KOE
-    const generation = (q_val !== 0 && f600 !== 0) 
-      ? parseFloat(f600.toString()) * (1 - (yp / parseFloat(f600.toString()))) * mm_effective / q_val 
+    const generation = (q_val !== 0 && f6_val !== 0) 
+      ? f6_val * (1 - (yp / f6_val)) * mm_effective / q_val 
       : 0;
       
     // Загущение: f600 / (KOE * MM^2 * 0.01^2)
     const thickening = (q_val !== 0 && f6_val !== 0) 
-      ? parseFloat(f600.toString()) / (q_val * mm_effective * mm_effective * 0.01 * 0.01) 
+      ? f6_val / (q_val * mm_effective * mm_effective * 0.01 * 0.01) 
       : 0;
       
     const logArg = f6_val !== 0 ? f6_val * 0.001 : 0.06;
@@ -173,7 +172,6 @@ const App: React.FC = () => {
     const s = manualS !== undefined ? manualS : (f600 !== 0 ? yp / f600 : 0.0001);
     const logArg = f600 * 0.001;
     const logVal = logArg > 0 ? Math.log10(logArg) : 0;
-    // Используем упрощенную формулу для графика (MM=1 если не задано)
     const mm_val = parseFloat(labData.mm) || 1.0;
     let res = (s !== 0) ? (q * 0.01 * mm_val * 0.01 * mm_val * Math.pow(logVal, 2)) / s : 0;
     if (res < 30) res = 30;
@@ -222,9 +220,7 @@ const App: React.FC = () => {
   const handleGetConclusions = async () => {
     if (!results) { setAnalysisError("Введите данные."); return; }
     setAnalysisError(null); setIsAnalyzing(true);
-    
     const aistudio = (window as any).aistudio;
-
     try {
       if (!process.env.API_KEY && aistudio && typeof aistudio.openSelectKey === 'function') {
         await aistudio.openSelectKey();
@@ -239,9 +235,9 @@ const App: React.FC = () => {
            errorMessage.includes("403") || 
            errorMessage.includes("401")) && aistudio) {
         await aistudio.openSelectKey();
-        setAnalysisError("Пожалуйста, выберите корректный API ключ и попробуйте снова.");
+        setAnalysisError("Пожалуйста, выберите корректный API ключ.");
       } else {
-        setAnalysisError("Ошибка связи с ИИ. Убедитесь, что API ключ настроен в Vercel или выбран в диалоге.");
+        setAnalysisError("Ошибка связи с ИИ.");
       }
     } finally { setIsAnalyzing(false); }
   };
@@ -296,20 +292,8 @@ const App: React.FC = () => {
       const s1 = pptx.addSlide({ masterName: 'MASTER' });
       s1.addText('Технический отчет по качеству бентонита', { x: 1, y: 2, w: 11, fontSize: 36, bold: true, color: style.primary });
       const s2 = pptx.addSlide({ masterName: 'MASTER' });
-      
-      const tableData = [
-        [{ text: 'Параметр' }, { text: 'Значение' }],
-        [{ text: 'Смектит' }, { text: `${results.m}%` }],
-        [{ text: 'КОЕ' }, { text: String(results.q) }],
-        [{ text: 'PV' }, { text: results.pv.toFixed(2) }],
-        [{ text: 'YP' }, { text: results.yp.toFixed(2) }],
-        [{ text: 'Замещение' }, { text: results.s.toFixed(3) }],
-        [{ text: 'Полнота' }, { text: results.completeness.toFixed(2) }]
-      ];
-      if (results.equivalent !== undefined) {
-        tableData.push([{ text: 'Эквивалент ПАВ' }, { text: results.equivalent.toFixed(3) }]);
-      }
-
+      const tableData = [[{ text: 'Параметр' }, { text: 'Значение' }], [{ text: 'Смектит' }, { text: `${results.m}%` }], [{ text: 'КОЕ' }, { text: String(results.q) }], [{ text: 'PV' }, { text: results.pv.toFixed(2) }], [{ text: 'YP' }, { text: results.yp.toFixed(2) }], [{ text: 'Замещение' }, { text: results.s.toFixed(3) }], [{ text: 'Полнота' }, { text: results.completeness.toFixed(2) }]];
+      if (results.equivalent !== undefined) tableData.push([{ text: 'Эквивалент ПАВ' }, { text: results.equivalent.toFixed(3) }]);
       s2.addTable(tableData, { x: 0.5, y: 1.5, w: 12, border: { pt: 1, color: style.secondary }, fill: { color: 'ffffff' } });
       savedCharts.forEach(chart => { const sc = pptx.addSlide({ masterName: 'MASTER' }); sc.addImage({ data: chart.imageData, x: 1, y: 1, w: 11, h: 5.5 }); });
       await pptx.writeFile({ fileName: 'Geolab_Analysis.pptx' });
@@ -329,27 +313,12 @@ const App: React.FC = () => {
       const ctxIn = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       const ctxOut = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       
-      // Формируем системную инструкцию на базе документов
-      const systemInstruction = `Вы — эксперт GeoLab Pro по реологии бентонита. Ваша задача — помогать пользователю анализировать результаты лабораторных тестов, опираясь на научные закономерности:
-1. Реология: Пластическая вязкость (PV) — это скорость разрушения структуры. Чем крупнее слоистый пакет, тем выше PV и ниже YP.
-2. Соотношение YP/PV (хрупкость): Если > 6, бентонит активирован содой, пригодность для органомодификации сомнительна. Если 1.5 - 3, бентонит класса 'Drilling grade'.
-3. Работа когезии (2*PV) vs Работа адгезии (YP): У природного бентонита они близки (YP ≈ 2*PV). Анизотропия (YP/PV > 6) говорит об активации.
-4. Основные критерии GeoLab:
-   - Изотропия: Приемлемо >= 0.24.
-   - Генерация: Приемлемо > 8.5.
-   - Загущение: Норма 1.0 - 1.3 (ниже 1 — хорошо).
-   - Полнота: Приемлемо 100-115, высокое качество > 115.
-   
-Текущие данные пользователя (если есть): 
-${results ? `
-- PV: ${results.pv.toFixed(2)}, YP: ${results.yp.toFixed(2)}, YP/PV: ${results.ypPvRatio.toFixed(2)}
-- Изотропия: ${results.isotropy.toFixed(4)}
-- Генерация: ${results.generation.toFixed(2)}
-- Загущение: ${results.thickening.toFixed(2)}
-- Полнота: ${results.completeness.toFixed(2)}
-` : 'Данные пока не введены.'}
-
-Будьте профессиональны, используйте термины "пакетные агрегаты", "обменная емкость", "ММ". Если пользователь диктует числа, подтверждайте их.`;
+      const systemInstruction = `Вы — эксперт GeoLab Pro по реологии бентонита. Помогайте анализировать результаты, опираясь на научные данные:
+1. Реология: Пластическая вязкость (PV) — скорость разрушения структуры. Чем крупнее слоистый пакет, тем выше PV и ниже YP.
+2. YP/PV (хрупкость): > 6 — бентонит активирован содой, для органомодификации сомнителен. 1.5 - 3 — класс 'Drilling grade'.
+3. Изотропия: Приемлемо >= 0.24. Генерация: Приемлемо > 8.5. Загущение: Норма 1.0 - 1.3. Полнота: Приемлемо 100-115, высокое качество > 115.
+4. PV ~ КОЕ(Ca)/КОЕ(Na). YP ~ ММ * (КОЕ/КОЕo).
+Текущие данные пользователя: ${results ? `PV:${results.pv.toFixed(2)}, YP:${results.yp.toFixed(2)}, Изотропия:${results.isotropy.toFixed(4)}, Полнота:${results.completeness.toFixed(2)}` : 'Данные не введены.'}`;
 
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
@@ -366,8 +335,7 @@ ${results ? `
             proc.onaudioprocess = (e) => { 
               sessionPromise.then(s => s.sendRealtimeInput({ media: createBlob(e.inputBuffer.getChannelData(0)) })); 
             };
-            source.connect(proc); 
-            proc.connect(ctxIn.destination);
+            source.connect(proc); proc.connect(ctxIn.destination);
           },
           onmessage: async (msg: LiveServerMessage) => {
             const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
@@ -375,19 +343,15 @@ ${results ? `
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctxOut.currentTime);
               const buffer = await decodeAudioData(decode(audioData), ctxOut, 24000, 1);
               const source = ctxOut.createBufferSource(); 
-              source.buffer = buffer; 
-              source.connect(ctxOut.destination);
-              source.addEventListener('ended', () => {
-                sourcesRef.current.delete(source);
-              });
+              source.buffer = buffer; source.connect(ctxOut.destination);
+              source.addEventListener('ended', () => sourcesRef.current.delete(source));
               source.start(nextStartTimeRef.current); 
               nextStartTimeRef.current += buffer.duration;
               sourcesRef.current.add(source);
             }
             if (msg.serverContent?.interrupted) {
               for (const source of sourcesRef.current.values()) { try { source.stop(); } catch (e) {} }
-              sourcesRef.current.clear();
-              nextStartTimeRef.current = 0;
+              sourcesRef.current.clear(); nextStartTimeRef.current = 0;
             }
             if (msg.serverContent?.inputTranscription) {
               const val = parseSpokenNumber(msg.serverContent.inputTranscription.text || '');
@@ -409,8 +373,6 @@ ${results ? `
     { label: 'YP/PV', value: results.ypPvRatio, type: 'YP/PV', formatted: results.ypPvRatio.toFixed(2) },
     { label: 'Степень замещения', value: results.s, type: 'Замещение', formatted: results.s.toFixed(3) }
   ] : [];
-
-  const isEquivStep = currentStep >= 5;
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-10 text-slate-900 flex flex-col items-center">
@@ -475,7 +437,7 @@ ${results ? `
         {!showResults ? (
           <div className="bg-white p-12 rounded-[2.5rem] shadow-2xl border border-slate-100 text-center relative overflow-hidden animate-slide-up">
             <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] mb-10">
-               {isEquivStep ? 'Расчет эквивалента: ' : ''}{LAB_LABELS[LAB_ORDER[currentStep]]}
+               {currentStep >= 5 ? 'Расчет эквивалента: ' : ''}{LAB_LABELS[LAB_ORDER[currentStep]]}
             </h2>
             <input type="text" inputMode="decimal" className="w-full text-center text-7xl font-mono font-black py-6 bg-slate-50 border-b-8 border-slate-100 focus:border-indigo-600 outline-none rounded-3xl transition-all"
               value={labData[LAB_ORDER[currentStep]]} onChange={(e) => setLabData(p => ({ ...p, [LAB_ORDER[currentStep]]: e.target.value }))}

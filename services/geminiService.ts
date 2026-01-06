@@ -30,7 +30,6 @@ export async function extractLabDataFromImage(base64Image: string): Promise<Part
       }
     });
 
-    // Use .text property directly and trim it
     return JSON.parse(response.text?.trim() || '{}');
   } catch (e) {
     console.error("Failed to extract lab data from image:", e);
@@ -66,7 +65,6 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
 
   try {
     const response = await ai.models.generateContent({
-      // Using flash model for broader availability across deployment environments
       model: 'gemini-3-flash-preview',
       contents: prompt,
       config: {
@@ -91,7 +89,6 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
       }
     });
 
-    // Use .text property directly and trim it
     const data = JSON.parse(response.text?.trim() || '{"conclusions":[]}');
     return data.conclusions || [];
   } catch (e) {
