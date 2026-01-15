@@ -5,7 +5,7 @@ export interface LabData {
   w: string; // влажность
   f300: string; // фи 300
   f600: string; // фи 600
-  s_equiv: string; // влага ПАВ
+  s_equiv: string; // влага глины
   mm: string; // ММ ПАВ
 }
 
@@ -28,6 +28,7 @@ export interface CalculationResult {
   q: number;
   w: number;
   f: number;
+  f600: number; // Added explicitly
   pv: number;
   yp: number;
   poe: number;

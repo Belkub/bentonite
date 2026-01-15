@@ -1,6 +1,5 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
-import { LabData, CalculationResult, Conclusion } from "../types";
+import { LabData, CalculationResult, Conclusion } from "../types.ts";
 
 // Extract laboratory data from an image of a lab report
 export async function extractLabDataFromImage(base64Image: string): Promise<Partial<LabData>> {
@@ -12,7 +11,7 @@ export async function extractLabDataFromImage(base64Image: string): Promise<Part
       contents: {
         parts: [
           { inlineData: { data: base64Image, mimeType: 'image/jpeg' } },
-          { text: 'Analyze this image and extract laboratory data for clay testing. Look for: Smectite content (содержание смектита), Cation Exchange Capacity (обменная емкость/КОЕ), Humidity/Water content (влажность), and rheometer readings at 300 and 600 RPM (Фи 300, Фи 600). Return ONLY a JSON object with keys "m", "q", "w", "f300", "f600" and their numeric values. If a value is missing, use null.' }
+          { text: 'Analyze this image and extract laboratory data for clay testing. Return ONLY a JSON object.' }
         ]
       },
       config: {
@@ -43,25 +42,13 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
   
   const prompt = `Проведи строгий экспертный анализ бентонита.
   ДАННЫЕ:
-  - Содержание смектита (m): ${results.m}%
-  - Обменная емкость (q/КОЕ): ${results.q} мг-экв/100г
-  - YP/PV отношение: ${results.ypPvRatio.toFixed(2)}
+  - m: ${results.m}%
+  - q: ${results.q}
+  - YP/PV: ${results.ypPvRatio.toFixed(2)}
   - Изотропия: ${results.isotropy.toFixed(4)}
-  - Критерий генерации: ${results.generation.toFixed(2)}
-  - Критерий загущения: ${results.thickening.toFixed(2)}
-  - Критерий полноты: ${results.completeness.toFixed(2)}
-
-  КРИТЕРИИ ОЦЕНКИ (будь критичен!):
-  1. YP/PV: <1.5 или >6 часто указывает на проблемы (необработанный или пересоленный).
-  2. Изотропия: < 0.24 — это ПЛОХО (negative).
-  3. Генерация: < 8.5 — это НИЗКИЙ потенциал (negative).
-  4. Загущение: > 1.3 — слишком высокое, возможны трудности (negative).
-  5. Полнота: < 100 — недостаточное качество (negative).
-
-  ЗАДАЧА: Сформулируй 5 выводов. 
-  Для каждого вывода ОПАСНОСТЬ или НЕДОСТАТОК классифицируй ТОЛЬКО как "negative".
-  Хорошие показатели — "positive". Спорные — "neutral".
-  Используй только эти три слова для sentiment.`;
+  - Генерация: ${results.generation.toFixed(2)}
+  - Загущение: ${results.thickening.toFixed(2)}
+  - Полнота: ${results.completeness.toFixed(2)}`;
 
   try {
     const response = await ai.models.generateContent({
@@ -78,7 +65,7 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
                 type: Type.OBJECT,
                 properties: {
                   text: { type: Type.STRING },
-                  sentiment: { type: Type.STRING, description: "Strictly 'positive', 'neutral', or 'negative'" }
+                  sentiment: { type: Type.STRING }
                 },
                 required: ["text", "sentiment"]
               }
@@ -95,8 +82,4 @@ export async function getBentoniteConclusions(results: CalculationResult): Promi
     console.error("Failed to get conclusions from Gemini:", e);
     throw e;
   }
-}
-
-export async function generateThematicImage(topic: string): Promise<string | null> {
-  return null;
 }
