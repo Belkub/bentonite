@@ -7,6 +7,7 @@ export interface LabData {
   f600: string; // фи 600
   s_equiv: string; // влага глины
   mm: string; // ММ ПАВ
+  t: string; // Доля ПАВ, %
 }
 
 export type LabKey = keyof LabData;
@@ -28,7 +29,7 @@ export interface CalculationResult {
   q: number;
   w: number;
   f: number;
-  f600: number; // Added explicitly
+  f600: number;
   pv: number;
   yp: number;
   poe: number;
@@ -48,7 +49,8 @@ export const LAB_LABELS: Record<LabKey, string> = {
   f300: 'Фи 300',
   f600: 'Фи 600',
   s_equiv: 'Влага глины, %',
-  mm: 'Мол масса ПАВ, г/моль'
+  mm: 'Мол масса ПАВ, г/моль',
+  t: 'Доля ПАВ, %'
 };
 
-export const LAB_ORDER: LabKey[] = ['m', 'q', 'w', 'f300', 'f600', 's_equiv', 'mm'];
+export const LAB_ORDER: LabKey[] = ['m', 'q', 'w', 'f300', 'f600', 's_equiv', 'mm', 't'];

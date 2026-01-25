@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
 import { LabData, LAB_LABELS, LAB_ORDER, CalculationResult, Conclusion, SavedChart } from './types.ts';
@@ -40,7 +41,7 @@ const CHART_VARIABLES = {
 
 const App: React.FC = () => {
   const [labData, setLabData] = useState<LabData>({
-    m: '', q: '', w: '', f300: '', f600: '', s_equiv: '', mm: ''
+    m: '', q: '', w: '', f300: '', f600: '', s_equiv: '', mm: '', t: ''
   });
   const [currentStep, setCurrentStep] = useState(0);
   const [showResults, setShowResults] = useState(false);
@@ -76,7 +77,7 @@ const App: React.FC = () => {
   }, []);
 
   const results = useMemo((): CalculationResult | null => {
-    const { m, q, w, f300, f600, s_equiv, mm } = labData;
+    const { m, q, w, f300, f600, s_equiv, mm, t } = labData;
     
     const parseNum = (val: string | number | null | undefined): number => {
       if (val === null || val === undefined) return NaN;
@@ -91,6 +92,7 @@ const App: React.FC = () => {
     const f6_val = parseNum(f600);
     const mm_val = parseNum(mm);
     const s_equiv_val = parseNum(s_equiv);
+    const t_val = parseNum(t);
     
     const isValidBase = !isNaN(m_val) && !isNaN(q_val) && !isNaN(w_val) && !isNaN(f3_val) && !isNaN(f6_val);
     if (!isValidBase) return null;
@@ -122,8 +124,9 @@ const App: React.FC = () => {
       : 0;
     
     let equivalent: number | undefined = undefined;
-    if (!isNaN(s_equiv_val) && !isNaN(mm_val)) {
-      equivalent = (q_val / (1 - w_val * 0.01)) * 10 * 0.001 * mm_val * (1 - s_equiv_val * 0.01);
+    if (!isNaN(s_equiv_val) && !isNaN(mm_val) && !isNaN(t_val) && t_val !== 0) {
+      const numerator = (q_val / (1 - w_val * 0.01)) * 10 * 0.001 * mm_val * (1 - s_equiv_val * 0.01);
+      equivalent = numerator / (t_val * 0.01);
     }
 
     return { 
@@ -379,13 +382,15 @@ const App: React.FC = () => {
   };
 
   const gridResults = results ? [
-    { label: 'Фи 600', value: results.f600, type: 'f600', formatted: results.f600.toString() }, // Added f600
+    { label: 'Фи 600', value: results.f600, type: 'f600', formatted: results.f600.toString() },
     { label: 'Изотропия', value: results.isotropy, type: 'Изотропия', formatted: results.isotropy.toFixed(4) },
     { label: 'Генерация', value: results.generation, type: 'Генерация', formatted: results.generation.toFixed(2) },
     { label: 'Загущение', value: results.thickening, type: 'Загущение', formatted: results.thickening.toFixed(2) },
     { label: 'YP/PV', value: results.ypPvRatio, type: 'YP/PV', formatted: results.ypPvRatio.toFixed(2) },
     { label: 'Степень замещения', value: results.s, type: 'Замещение', formatted: results.s.toFixed(3) }
   ] : [];
+
+  const maxSteps = LAB_ORDER.length - 1;
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-10 text-slate-900 flex flex-col items-center">
@@ -431,7 +436,7 @@ const App: React.FC = () => {
           </div>
           <div className="space-y-2">
             <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Расчет Эквивалента</h4>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               {LAB_ORDER.slice(5).map((key, index) => {
                 const stepIdx = index + 5;
                 return (
@@ -453,9 +458,9 @@ const App: React.FC = () => {
             </h2>
             <input type="text" inputMode="decimal" className="w-full text-center text-7xl font-mono font-black py-6 bg-slate-50 border-b-8 border-slate-100 focus:border-indigo-600 outline-none rounded-3xl transition-all"
               value={labData[LAB_ORDER[currentStep]]} onChange={(e) => setLabData(p => ({ ...p, [LAB_ORDER[currentStep]]: e.target.value }))}
-              onKeyDown={(e) => e.key === 'Enter' && (currentStep < 6 ? setCurrentStep(currentStep + 1) : setShowResults(true))} autoFocus />
-            <button onClick={() => (currentStep < 6 ? setCurrentStep(currentStep + 1) : setShowResults(true))} className="mt-12 bg-indigo-600 text-white px-16 py-5 rounded-3xl font-black uppercase text-sm tracking-widest shadow-2xl hover:bg-indigo-700 active:scale-95 transition-all">
-              {currentStep === 6 ? 'Рассчитать' : 'Продолжить'}
+              onKeyDown={(e) => e.key === 'Enter' && (currentStep < maxSteps ? setCurrentStep(currentStep + 1) : setShowResults(true))} autoFocus />
+            <button onClick={() => (currentStep < maxSteps ? setCurrentStep(currentStep + 1) : setShowResults(true))} className="mt-12 bg-indigo-600 text-white px-16 py-5 rounded-3xl font-black uppercase text-sm tracking-widest shadow-2xl hover:bg-indigo-700 active:scale-95 transition-all">
+              {currentStep === maxSteps ? 'Рассчитать' : 'Продолжить'}
             </button>
           </div>
         ) : (
