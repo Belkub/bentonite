@@ -1,13 +1,12 @@
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
-import { LabData, LAB_LABELS, LAB_ORDER, CalculationResult, Conclusion, SavedChart } from './types.ts';
+import { LabData, LAB_LABELS, LAB_ORDER, CalculationResult, Conclusion, SavedChart } from './types';
 import { 
   extractLabDataFromImage,
   getBentoniteConclusions
-} from './services/geminiService.ts';
-import { decode, decodeAudioData, createBlob } from './utils/audio.ts';
-import { parseSpokenNumber } from './utils/voiceParser.ts';
+} from './services/geminiService';
+import { decode, decodeAudioData, createBlob } from './utils/audio';
+import { parseSpokenNumber } from './utils/voiceParser';
 
 // Библиотеки для экспорта
 import * as docx from 'docx';
@@ -125,6 +124,7 @@ const App: React.FC = () => {
     
     let equivalent: number | undefined = undefined;
     if (!isNaN(s_equiv_val) && !isNaN(mm_val) && !isNaN(t_val) && t_val !== 0) {
+      // Итоговое значение (числитель) делится на произведение (t * 0.01)
       const numerator = (q_val / (1 - w_val * 0.01)) * 10 * 0.001 * mm_val * (1 - s_equiv_val * 0.01);
       equivalent = numerator / (t_val * 0.01);
     }

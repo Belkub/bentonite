@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { LabData, CalculationResult, Conclusion } from "../types.ts";
+import { LabData, CalculationResult, Conclusion } from "../types";
 
 // Extract laboratory data from an image of a lab report
 export async function extractLabDataFromImage(base64Image: string): Promise<Partial<LabData>> {
